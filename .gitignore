@@ -1,0 +1,27 @@
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+!.env.local.example
+coverage/
+.react-email/
+.DS_Store
+
+# Local databases, Supabase CLI state and runtime files.
+.supabase/
+supabase/.temp/
+supabase/.branches/
+*.log
+*.pid
+tmp/
+.cache/
+
+# Private keys and certificates.
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+secrets/

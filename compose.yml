@@ -1,0 +1,22 @@
+services:
+  email-gateway:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env.local
+    environment:
+      BLOOM_APP_SMTP_HOST: mailpit
+      PONTEBR_SMTP_HOST: mailpit
+      BLOCOS_E_BITS_SMTP_HOST: mailpit
+      JBQNETO_SMTP_HOST: mailpit
+    depends_on:
+      - mailpit
+    ports:
+      - "${PORT:-3000}:3000"
+
+  mailpit:
+    image: axllent/mailpit:v1.27.8
+    restart: unless-stopped
+    ports:
+      - "1025:1025"
+      - "8025:8025"

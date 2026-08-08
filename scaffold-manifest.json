@@ -1,0 +1,21 @@
+{
+  "generated": "2026-08-07",
+  "purpose": "V0 central email gateway scaffold",
+  "stack": [
+    "Node.js",
+    "TypeScript",
+    "Fastify",
+    "Zod",
+    "Nodemailer",
+    "React Email",
+    "Vitest"
+  ],
+  "important_decisions": [
+    "Templates are source-controlled and provider-independent",
+    "Project API key chooses sender and SMTP",
+    "Consumers cannot send raw HTML/from/SMTP credentials",
+    "SMTP is behind EmailProvider abstraction",
+    "No database/queue/dashboard in V0",
+    "In-memory idempotency is explicitly non-durable"
+  ]
+}

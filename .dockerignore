@@ -1,0 +1,15 @@
+node_modules
+dist
+.git
+.env
+.env.*
+!.env.example
+!.env.local.example
+coverage
+.react-email
+supabase/.temp
+supabase/.branches
+*.log
+*.pem
+*.key
+secrets
