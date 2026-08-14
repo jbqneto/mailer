@@ -27,12 +27,27 @@ The MVP includes:
 - Nodemailer SMTP delivery;
 - authenticated and unauthenticated SMTP;
 - in-memory delivery records and idempotency with a 24-hour TTL;
+- an in-process email job queue and background worker with configurable concurrency;
 - an authenticated HTML preview API;
 - a visual preview workspace at `/preview`;
 - a Mailpit development environment;
 - Vitest tests.
 
-It intentionally does not include a durable database, queue, worker, retry system, dashboard, or alternate provider. Delivery records are currently ephemeral and are lost on restart.
+The default development configuration uses in-memory delivery records and an
+in-process queue. For production, durable delivery records and a durable queue
+adapter are available through Supabase; the migration must be applied first.
+
+For a durable queue, apply the job migration and configure:
+
+```env
+QUEUE_STORE=supabase
+DELIVERY_STORE=supabase
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=your-server-only-service-role-key
+```
+
+The Supabase worker claims jobs atomically, uses leases to recover jobs from a
+dead worker, and stores retry timing and attempt counts in the database.
 
 ## Architecture
 
@@ -51,6 +66,12 @@ Template registry + Zod validation
       |
       v
 React Email rendering
+      |
+      v
+Email job queue
+      |
+      v
+Background worker
       |
       v
 EmailProvider interface
@@ -127,7 +148,7 @@ do not upload the secret file as part of the source code.
 Docker Compose also uses `.env.local` and overrides the SMTP hostname inside
 the container to `mailpit`; host-based development uses `localhost`.
 
-Project metadata is kept in [`src/config/project-definitions.ts`](src/config/project-definitions.ts). Secrets and SMTP credentials belong in `.env` or in the deployment environment. `.env` is ignored by Git.
+Project metadata is kept in [`src/config/projects.json`](src/config/projects.json). Secrets and SMTP credentials belong in `.env` or in the deployment environment. `.env` is ignored by Git.
 
 The preview workspace is protected by administrator credentials:
 
@@ -193,6 +214,17 @@ When the limit is reached, the API returns `429` with `Retry-After`,
 `RateLimit-Limit`, `RateLimit-Remaining`, and `RateLimit-Reset` headers. The
 current limiter is in memory and therefore applies per process. A future
 Redis-backed adapter can replace it without changing the routes.
+
+SMTP delivery retries transient connection errors and SMTP 4xx responses with
+exponential backoff. Configure the policy with:
+
+```env
+SMTP_MAX_ATTEMPTS=3
+SMTP_RETRY_DELAY_MS=250
+```
+
+The gateway exposes aggregated Prometheus-compatible metrics at `/metrics`.
+Metrics contain no recipients, subjects, payloads or credentials.
 
 ### SMTP authentication modes
 
@@ -506,6 +538,8 @@ npm run build
 ```
 
 The test suite uses a fake provider and does not connect to real SMTP servers.
+Every push and pull request also runs typecheck, tests and build on Node.js 22
+and 24 through GitHub Actions.
 
 ## Security boundaries
 
@@ -520,7 +554,8 @@ The test suite uses a fake provider and does not connect to real SMTP servers.
 - Delivery history and idempotency are in memory only and are lost on restart.
 - Idempotency is not shared between multiple instances.
 - The delivery list is operational history only; it is not durable auditing.
-- There are no automatic retries or queues.
+- The in-memory queue has no crash recovery; use `QUEUE_STORE=supabase` for
+  multi-instance production use.
 - Only SMTP/Nodemailer is implemented.
 - The `/preview` page is an internal development tool, not a user-management or dashboard feature.
 - Admin sessions are in memory and are not shared across instances.

@@ -7,6 +7,17 @@ const runtimeEnvSchema = z.object({
   LOG_LEVEL: z
     .enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'])
     .default('info'),
+  TRUST_PROXY: z.preprocess(
+    (value) => (value === 'true' ? true : value === 'false' ? false : value),
+    z.boolean().default(false),
+  ),
+  BODY_LIMIT_BYTES: z.coerce.number().int().min(1_024).max(10_485_760).default(1_048_576),
+  SMTP_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(5).default(3),
+  SMTP_RETRY_DELAY_MS: z.coerce.number().int().min(0).max(60_000).default(250),
+  QUEUE_CONCURRENCY: z.coerce.number().int().min(1).max(20).default(2),
+  QUEUE_STORE: z.enum(['memory', 'supabase']).default('memory'),
+  QUEUE_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(10).default(3),
+  QUEUE_RETRY_DELAY_MS: z.coerce.number().int().min(0).max(300_000).default(1_000),
   RATE_LIMIT_MAX_REQUESTS: z.coerce.number().int().min(1).default(60),
   RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().min(1).default(60),
   DELIVERY_STORE: z.enum(['memory', 'supabase']).default('memory'),

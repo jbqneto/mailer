@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { PROJECT_DEFINITIONS } from './project-definitions.js';
+import { PROJECT_DEFINITIONS, type ProjectDefinition } from './project-definitions.js';
 import type { ProjectConfig } from '../domain/project.js';
 import { assertProductionValue } from './production-config.js';
 
@@ -8,20 +8,24 @@ const apiKeySchema = z.string().min(32);
 
 function required(prefix: string, suffix: string): string {
   const key = `${prefix}_${suffix}`;
-  const value = process.env[key];
+  const value = process.env[key]?.trim();
 
   if (!value) {
     throw new Error(`Missing required environment variable: ${key}`);
   }
 
   assertProductionValue(key, value);
-
   return value;
 }
 
 function optional(prefix: string, suffix: string): string | undefined {
-  const value = process.env[`${prefix}_${suffix}`]?.trim();
-  return value ? value : undefined;
+  const key = `${prefix}_${suffix}`;
+  const value = process.env[key]?.trim();
+
+  if (!value) return undefined;
+
+  assertProductionValue(key, value);
+  return value;
 }
 
 function parseBoolean(value: string, key: string): boolean {
@@ -30,31 +34,34 @@ function parseBoolean(value: string, key: string): boolean {
   throw new Error(`${key} must be "true" or "false"`);
 }
 
-function loadProject(
-  definition: (typeof PROJECT_DEFINITIONS)[number],
-): ProjectConfig {
+function loadProject(definition: ProjectDefinition): ProjectConfig {
   const prefix = definition.envPrefix;
-
   const apiKey = apiKeySchema.parse(required(prefix, 'API_KEY'));
   const fromEmail = emailSchema.parse(required(prefix, 'FROM_EMAIL'));
-  const fromName = required(prefix, 'FROM_NAME');
+  const fromName = optional(prefix, 'FROM_NAME') ?? fromEmail;
   const replyToRaw = optional(prefix, 'REPLY_TO');
   const replyTo = replyToRaw ? emailSchema.parse(replyToRaw) : undefined;
 
-  const portRaw = required(prefix, 'SMTP_PORT');
-  const port = z.coerce.number().int().min(1).max(65535).parse(portRaw);
+  const port = z.coerce.number().int().min(1).max(65535).parse(
+    required(prefix, 'SMTP_PORT'),
+  );
+  const secure = parseBoolean(
+    required(prefix, 'SMTP_SECURE'),
+    `${prefix}_SMTP_SECURE`,
+  );
 
-  const secureKey = `${prefix}_SMTP_SECURE`;
-  const secure = parseBoolean(required(prefix, 'SMTP_SECURE'), secureKey);
-  const authKey = `${prefix}_SMTP_AUTH`;
-  const authEnabled = parseBoolean(required(prefix, 'SMTP_AUTH'), authKey);
+  const user = optional(prefix, 'SMTP_USER');
+  const password = optional(prefix, 'SMTP_PASSWORD');
+  const authRaw = optional(prefix, 'SMTP_AUTH');
+  const authEnabled = authRaw === undefined
+    ? Boolean(user || password)
+    : parseBoolean(authRaw, `${prefix}_SMTP_AUTH`);
 
-  const auth = authEnabled
-    ? {
-        user: required(prefix, 'SMTP_USER'),
-        password: required(prefix, 'SMTP_PASSWORD'),
-      }
-    : false;
+  if (authEnabled && (!user || !password)) {
+    throw new Error(
+      `${prefix}_SMTP_USER and ${prefix}_SMTP_PASSWORD are required when SMTP authentication is enabled`,
+    );
+  }
 
   return {
     id: definition.id,
@@ -66,17 +73,20 @@ function loadProject(
       host: required(prefix, 'SMTP_HOST'),
       port,
       secure,
-      auth,
+      auth: authEnabled ? { user: user!, password: password! } : false,
     },
     allowedTemplates: definition.allowedTemplates,
   };
 }
 
-export function loadProjects(): ProjectConfig[] {
+export function loadProjects(
+  definitions: readonly ProjectDefinition[] = PROJECT_DEFINITIONS,
+): ProjectConfig[] {
+  const activeDefinitions = definitions.filter((definition) => definition.active);
   const projects: ProjectConfig[] = [];
   const errors: string[] = [];
 
-  for (const definition of PROJECT_DEFINITIONS) {
+  for (const definition of activeDefinitions) {
     try {
       projects.push(loadProject(definition));
     } catch (error) {
@@ -87,7 +97,9 @@ export function loadProjects(): ProjectConfig[] {
   }
 
   if (errors.length > 0) {
-    throw new Error(`Invalid project configuration:\n${errors.map((error) => `- ${error}`).join('\n')}`);
+    throw new Error(
+      `Invalid project configuration:\n${errors.map((error) => `- ${error}`).join('\n')}`,
+    );
   }
 
   const ids = new Set(projects.map((project) => project.id));

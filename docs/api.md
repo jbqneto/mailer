@@ -10,6 +10,19 @@ Basic process health check. It does not contact SMTP.
 }
 ```
 
+## GET /metrics
+
+Returns aggregated Prometheus-compatible metrics for HTTP requests and email
+delivery results. Labels contain only method, route, status code and delivery
+status; recipients, subjects, payloads and credentials are never included.
+
+## SMTP retry policy
+
+Transient connection errors, timeouts and SMTP 4xx responses are retried with
+exponential backoff. Configure the maximum attempts and initial delay with
+`SMTP_MAX_ATTEMPTS` and `SMTP_RETRY_DELAY_MS`. Permanent SMTP 5xx responses are
+not retried.
+
 ## GET /ready
 
 Readiness check returned once the application has started with valid
@@ -27,7 +40,6 @@ Authentication:
 
 ```http
 Authorization: Bearer <project-api-key>
-# or: Idempotency-Key: <stable-key>
 ```
 
 Request:
@@ -55,6 +67,11 @@ Successful response:
 }
 ```
 
+With the production queue enabled, a newly accepted request returns
+`status: "queued"` and `202`. The delivery ID can be used with
+`GET /v1/emails/:id`; its status changes from `processing` to `accepted` or
+`failed` when the background worker finishes.
+
 Duplicate response:
 
 ```json
@@ -65,6 +82,13 @@ Duplicate response:
   "template": "welcome-user"
 }
 ```
+
+When a request with the same idempotency key is still being delivered, the
+gateway returns `202` with `status: "processing"` and the original delivery
+ID. It does not send a second message. If the original delivery failed, the
+same key remains reserved and subsequent requests return `502` with the
+delivery ID; use a new business event/idempotency key only after deciding how
+to handle that failed or provider-ambiguous delivery.
 
 ## POST /v1/emails/preview
 
@@ -103,6 +127,10 @@ The default `DELIVERY_STORE=memory` adapter is suitable for local development.
 Set `DELIVERY_STORE=supabase` and configure the server-only Supabase URL and
 service-role key to use durable records. The migration is stored at
 `supabase/migrations/20260808120000_create_email_gateway_deliveries.sql`.
+
+For a durable worker queue, also set `QUEUE_STORE=supabase` and apply
+`supabase/migrations/20260809010000_create_email_gateway_jobs.sql`. The queue
+uses database leases to reclaim jobs whose worker stopped before completing.
 
 ## Rate limiting
 

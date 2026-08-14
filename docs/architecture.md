@@ -61,17 +61,22 @@ instances. An Oracle or MySQL adapter can implement the same port using its
 own transaction and unique constraint, without changing `SendEmailUseCase` or
 the HTTP contract.
 
+Email jobs use a separate queue port. The memory adapter is useful for local
+development. The Supabase adapter stores serializable rendered messages,
+claims jobs with row locks, persists exponential-backoff timing, and reclaims
+expired worker leases. Provider failures are terminal because retrying after an
+ambiguous SMTP response could duplicate an email.
+
 Application code depends on `EmailProvider`, not on Nodemailer.
 
-## Why no durable database yet?
+## Why is memory still the default?
 
 The V0 requirement is fast, functional and cheap.
-A durable database would immediately add schema, migrations, connection
-management, backup and deployment concerns. The port exists now so that this
-change remains isolated when durable history or multi-instance idempotency is
-needed.
+A durable database adds schema, migrations, connection management, backup and
+deployment concerns. The Supabase ports exist now so the durable deployment can
+be enabled when needed without changing the HTTP contract.
 
-Add persistence when there is a concrete need for:
+Enable durable persistence when there is a concrete need for:
 - durable idempotency;
 - delivery history;
 - auditing;

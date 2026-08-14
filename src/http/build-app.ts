@@ -4,6 +4,7 @@ import type { EmailProvider } from '../domain/email-provider.js';
 import type { ProjectConfig } from '../domain/project.js';
 import {
   SendEmailUseCase,
+  EmailDeliveryFailedError,
   IdempotencyConflictError,
   previewEmailInputSchema,
   sendEmailInputSchema,
@@ -27,6 +28,8 @@ import { z } from 'zod';
 import { safeErrorDetails } from './safe-error.js';
 import type { RateLimiter } from '../application/rate-limiter.js';
 import { InMemoryRateLimiter } from '../infrastructure/rate-limit/in-memory-rate-limiter.js';
+import { GatewayMetrics } from '../observability/metrics.js';
+import type { EmailJobQueue } from '../application/email-job-queue.js';
 
 interface BuildAppDependencies {
   projects: ProjectConfig[];
@@ -36,6 +39,10 @@ interface BuildAppDependencies {
   secureAdminCookie?: boolean;
   deliveryStore?: EmailDeliveryStore;
   rateLimiter?: RateLimiter;
+  bodyLimit?: number;
+  trustProxy?: boolean;
+  metrics?: GatewayMetrics;
+  emailQueue?: EmailJobQueue;
   logger?: boolean | { level: string };
 }
 
@@ -47,10 +54,36 @@ export function buildApp({
   secureAdminCookie = false,
   deliveryStore = new InMemoryEmailDeliveryStore(),
   rateLimiter = new InMemoryRateLimiter(),
+  bodyLimit = 1_048_576,
+  trustProxy = false,
+  metrics = new GatewayMetrics(),
+  emailQueue,
   logger = true,
 }: BuildAppDependencies): FastifyInstance {
-  const app = Fastify({ logger });
+  const app = Fastify({ logger, bodyLimit, trustProxy });
   const sendEmail = new SendEmailUseCase(emailProvider, deliveryStore);
+  const requestStartedAt = new WeakMap<object, bigint>();
+
+  app.addHook('onRequest', async (request, reply) => {
+    requestStartedAt.set(request, process.hrtime.bigint());
+    reply.header('X-Request-Id', request.id);
+  });
+
+  app.addHook('onResponse', async (request, reply) => {
+    const startedAt = requestStartedAt.get(request);
+    const durationMs = startedAt === undefined
+      ? 0
+      : Number(process.hrtime.bigint() - startedAt) / 1_000_000;
+    metrics.increment('email_gateway_http_requests_total', {
+      method: request.method,
+      route: request.routeOptions.url ?? 'unknown',
+      status_code: reply.statusCode.toString(),
+    });
+    metrics.observe('email_gateway_http_request_duration_ms', durationMs, {
+      method: request.method,
+      route: request.routeOptions.url ?? 'unknown',
+    });
+  });
 
   function enforceRateLimit(projectId: string, reply: FastifyReply): boolean {
     const decision = rateLimiter.consume(projectId);
@@ -77,6 +110,12 @@ export function buildApp({
   app.get('/ready', async () => ({
     status: 'ready',
   }));
+
+  app.get('/metrics', async (_request, reply) => {
+    return reply
+      .type('text/plain; version=0.0.4; charset=utf-8')
+      .send(metrics.renderPrometheus());
+  });
 
   app.post('/admin/login', async (request, reply) => {
     const rateLimitKey = request.ip;
@@ -320,7 +359,9 @@ export function buildApp({
       : parsed.data;
 
     try {
-      const result = await sendEmail.execute(project, input);
+      const result = emailQueue
+        ? await sendEmail.enqueue(project, input, emailQueue)
+        : await sendEmail.execute(project, input);
 
       request.log.info(
         {
@@ -331,8 +372,9 @@ export function buildApp({
         },
         'email request processed',
       );
+      metrics.increment('email_gateway_deliveries_total', { status: result.status });
 
-      return reply.code(result.status === 'accepted' ? 202 : 200).send(result);
+      return reply.code(result.status === 'accepted' || result.status === 'processing' || result.status === 'queued' ? 202 : 200).send(result);
     } catch (error) {
       if (error instanceof UnknownTemplateError) {
         return reply.code(400).send({
@@ -355,6 +397,25 @@ export function buildApp({
         });
       }
 
+      if (error instanceof EmailDeliveryFailedError) {
+        metrics.increment('email_gateway_deliveries_total', { status: 'failed' });
+        request.log.error(
+          {
+            errorName: error.name,
+            errorCode: error.errorCode,
+            deliveryId: error.deliveryId,
+            projectId: project.id,
+            template: input.template,
+          },
+          'email delivery failed',
+        );
+        return reply.code(502).send({
+          error: 'email_provider_failure',
+          message: 'The email provider could not accept the message',
+          deliveryId: error.deliveryId,
+        });
+      }
+
       if (error instanceof ZodError) {
         return reply.code(400).send({
           error: 'invalid_template_data',
@@ -373,6 +434,7 @@ export function buildApp({
         },
         'email provider failure',
       );
+      metrics.increment('email_gateway_deliveries_total', { status: 'failed' });
 
       return reply.code(502).send({
         error: 'email_provider_failure',

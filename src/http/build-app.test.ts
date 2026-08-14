@@ -65,7 +65,27 @@ describe('POST /v1/emails/preview', () => {
     });
 
     expect(response.statusCode).toBe(200);
+    expect(response.headers['x-request-id']).toBeDefined();
     expect(response.json()).toEqual({ status: 'ready' });
+
+    await app.close();
+  });
+
+  it('exposes aggregated Prometheus metrics without sensitive request data', async () => {
+    const app = buildApp({
+      projects: [project],
+      emailProvider: new FakeEmailProvider(),
+      adminAuth,
+      logger: false,
+    });
+
+    await app.inject({ method: 'GET', url: '/health' });
+    const response = await app.inject({ method: 'GET', url: '/metrics' });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['content-type']).toContain('text/plain');
+    expect(response.body).toContain('email_gateway_http_requests_total');
+    expect(response.body).not.toContain('recipient@example.com');
 
     await app.close();
   });
@@ -469,7 +489,7 @@ describe('POST /v1/emails', () => {
     await app.close();
   });
 
-  it('releases idempotency after a provider failure so retry can succeed', async () => {
+  it('keeps a failed idempotency key reserved so retry cannot resend', async () => {
     class RetryProvider extends FakeEmailProvider {
       private attempts = 0;
 
@@ -514,9 +534,75 @@ describe('POST /v1/emails', () => {
     });
 
     expect(first.statusCode).toBe(502);
-    expect(second.statusCode).toBe(202);
-    expect(provider.sent).toHaveLength(1);
+    expect(second.statusCode).toBe(502);
+    expect(second.json()).toMatchObject({ error: 'email_provider_failure' });
+    expect(provider.sent).toHaveLength(0);
 
+    await app.close();
+  });
+
+  it('returns processing for a concurrent request with the same idempotency key', async () => {
+    let markStarted!: () => void;
+    let release!: () => void;
+    const started = new Promise<void>((resolve) => { markStarted = resolve; });
+    const released = new Promise<void>((resolve) => { release = resolve; });
+    class SlowProvider extends FakeEmailProvider {
+      override async send(projectConfig: ProjectConfig, message: EmailMessage) {
+        const sending = super.send(projectConfig, message);
+        markStarted();
+        await released;
+        return sending;
+      }
+    }
+
+    const provider = new SlowProvider();
+    const app = buildApp({ projects: [project], emailProvider: provider, adminAuth, logger: false });
+    const request = {
+      method: 'POST' as const,
+      url: '/v1/emails',
+      headers: { authorization: `Bearer ${project.apiKey}` },
+      payload: {
+        template: 'generic-notification',
+        to: 'recipient@example.com',
+        idempotencyKey: 'http-concurrent-001',
+        data: { title: 'Hello', message: 'World' },
+      },
+    };
+
+    const firstPromise = app.inject(request);
+    await started;
+    const second = await app.inject(request);
+    release();
+    const first = await firstPromise;
+
+    expect(first.statusCode).toBe(202);
+    expect(second.statusCode).toBe(202);
+    expect(second.json()).toMatchObject({ status: 'processing', id: first.json().id });
+    expect(provider.sent).toHaveLength(1);
+    await app.close();
+  });
+
+  it('rejects request bodies larger than the configured limit', async () => {
+    const app = buildApp({
+      projects: [project],
+      emailProvider: new FakeEmailProvider(),
+      adminAuth,
+      bodyLimit: 1_024,
+      logger: false,
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/emails',
+      headers: { authorization: `Bearer ${project.apiKey}` },
+      payload: {
+        template: 'generic-notification',
+        to: 'recipient@example.com',
+        data: { title: 'Hello', message: 'x'.repeat(2_000) },
+      },
+    });
+
+    expect(response.statusCode).toBe(413);
     await app.close();
   });
 });

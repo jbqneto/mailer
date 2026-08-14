@@ -5,9 +5,15 @@ import type {
   EmailSendResult,
 } from '../../domain/email-provider.js';
 import type { ProjectConfig } from '../../domain/project.js';
+import { withRetry, type RetryOptions } from './retry.js';
 
 export class SmtpEmailProvider implements EmailProvider {
   private readonly transporters = new Map<string, Transporter>();
+
+  constructor(private readonly retryOptions: RetryOptions = {
+    maxAttempts: 3,
+    initialDelayMs: 250,
+  }) {}
 
   async send(
     project: ProjectConfig,
@@ -15,17 +21,20 @@ export class SmtpEmailProvider implements EmailProvider {
   ): Promise<EmailSendResult> {
     const transporter = this.getTransporter(project);
 
-    const info = await transporter.sendMail({
-      from: {
-        name: project.fromName,
-        address: project.fromEmail,
-      },
-      to: message.to,
-      subject: message.subject,
-      html: message.html,
-      text: message.text,
-      ...(project.replyTo ? { replyTo: project.replyTo } : {}),
-    });
+    const info = await withRetry(
+      () => transporter.sendMail({
+        from: {
+          name: project.fromName,
+          address: project.fromEmail,
+        },
+        to: message.to,
+        subject: message.subject,
+        html: message.html,
+        text: message.text,
+        ...(project.replyTo ? { replyTo: project.replyTo } : {}),
+      }),
+      this.retryOptions,
+    );
 
     return {
       messageId: info.messageId,

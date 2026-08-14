@@ -95,6 +95,13 @@ export class UnknownTemplateError extends Error {
   }
 }
 
+export class InvalidTemplateSubjectError extends Error {
+  constructor() {
+    super('Template subjects must contain 1 to 998 characters and no line breaks');
+    this.name = 'InvalidTemplateSubjectError';
+  }
+}
+
 export function hasTemplate(name: string): name is TemplateName {
   return Object.prototype.hasOwnProperty.call(templateRegistry, name);
 }
@@ -120,8 +127,13 @@ export async function compileTemplate(
     render(element, { plainText: true }),
   ]);
 
+  const subject = definition.subject(data).trim();
+  if (!subject || subject.length > 998 || /[\r\n]/.test(subject)) {
+    throw new InvalidTemplateSubjectError();
+  }
+
   return {
-    subject: definition.subject(data),
+    subject,
     html,
     text,
   };

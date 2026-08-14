@@ -10,6 +10,7 @@ import {
   TemplateNotAllowedError,
 } from './send-email.js';
 import { UnknownTemplateError } from '../templates/template-registry.js';
+import { InMemoryEmailJobQueue } from '../infrastructure/queue/in-memory-email-job-queue.js';
 
 class FakeEmailProvider implements EmailProvider {
   readonly sent: EmailMessage[] = [];
@@ -127,6 +128,86 @@ describe('SendEmailUseCase', () => {
 
     expect(first.status).toBe('accepted');
     expect(second.status).toBe('duplicate');
+    expect(provider.sent).toHaveLength(1);
+  });
+
+  it('does not send twice when the same idempotency key is concurrent', async () => {
+    let releaseProvider!: () => void;
+    let markProviderStarted!: () => void;
+    const providerStarted = new Promise<void>((resolve) => {
+      markProviderStarted = resolve;
+    });
+    const release = new Promise<void>((resolve) => {
+      releaseProvider = resolve;
+    });
+    class SlowProvider extends FakeEmailProvider {
+      override async send(projectConfig: ProjectConfig, message: EmailMessage) {
+        const sending = super.send(projectConfig, message);
+        markProviderStarted();
+        await release;
+        return sending;
+      }
+    }
+
+    const provider = new SlowProvider();
+    const useCase = new SendEmailUseCase(provider, new InMemoryEmailDeliveryStore());
+    const input = {
+      template: 'generic-notification',
+      to: 'user@example.com',
+      data: { title: 'Hello', message: 'World' },
+      idempotencyKey: 'notification:concurrent-123',
+    } as const;
+
+    const firstPromise = useCase.execute(project, input);
+    await providerStarted;
+    const second = await useCase.execute(project, input);
+    releaseProvider();
+    const first = await firstPromise;
+
+    expect(second).toMatchObject({ status: 'processing', id: first.id });
+    expect(provider.sent).toHaveLength(1);
+  });
+
+  it('keeps a failed idempotent delivery reserved to avoid an uncertain resend', async () => {
+    class FailingProvider implements EmailProvider {
+      async send(): Promise<{ messageId: string }> {
+        throw Object.assign(new Error('temporary SMTP failure'), { code: 'ETIMEDOUT' });
+      }
+    }
+
+    const store = new InMemoryEmailDeliveryStore();
+    const useCase = new SendEmailUseCase(new FailingProvider(), store);
+    const input = {
+      template: 'generic-notification',
+      to: 'user@example.com',
+      data: { title: 'Hello', message: 'World' },
+      idempotencyKey: 'notification:failed-123',
+    } as const;
+
+    await expect(useCase.execute(project, input)).rejects.toThrow('email delivery failed');
+    await expect(useCase.execute(project, input)).rejects.toThrow('email delivery failed');
+
+    const deliveries = await store.list();
+    expect(deliveries).toHaveLength(1);
+    expect(deliveries[0]).toMatchObject({ status: 'failed', errorCode: 'ETIMEDOUT' });
+  });
+
+  it('reserves and enqueues delivery without waiting for the provider', async () => {
+    const provider = new FakeEmailProvider();
+    const useCase = new SendEmailUseCase(provider, new InMemoryEmailDeliveryStore());
+    const queue = new InMemoryEmailJobQueue({
+      handler: (job) => useCase.processJob(job, project),
+    });
+
+    const result = await useCase.enqueue(project, {
+      template: 'generic-notification',
+      to: 'user@example.com',
+      data: { title: 'Hello', message: 'World' },
+      idempotencyKey: 'notification:queued-123',
+    }, queue);
+
+    expect(result).toMatchObject({ status: 'queued', template: 'generic-notification' });
+    await queue.close();
     expect(provider.sent).toHaveLength(1);
   });
 

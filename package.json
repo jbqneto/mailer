@@ -10,7 +10,7 @@
   "scripts": {
     "dev": "ENV_FILE=.env.local tsx watch src/server.ts",
     "dev:purelymail": "ENV_FILE=.env tsx watch src/server.ts",
-    "build": "npm install --include=dev && tsc -p tsconfig.build.json",
+    "build": "tsc -p tsconfig.build.json && cp src/config/projects.json dist/src/config/projects.json",
     "start": "node dist/src/server.js",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
