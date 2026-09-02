@@ -1,14 +1,14 @@
 import { createElement, type ComponentType } from 'react';
 import { render } from 'react-email';
 import { z, type ZodType } from 'zod';
-import WelcomeUserEmail from '../../emails/welcome-user.js';
-import GenericNotificationEmail from '../../emails/generic-notification.js';
+import WelcomeUserEmail from '../../emails/bloom/welcome-user.js';
+import GenericNotificationEmail from '../../emails/bloom/generic-notification.js';
 import {
   SharedAccessInvitationEmail,
   SharedAccessPermissionUpdatedEmail,
   SharedAccessRevokedEmail,
   SharedAccessSuspendedEmail,
-} from '../../emails/shared-access.js';
+} from '../../emails/bloom/shared-access.js';
 
 interface TemplateDefinition<T extends object> {
   schema: ZodType<T>;
