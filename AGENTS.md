@@ -6,7 +6,7 @@ project authentication and delivery orchestration. SMTP providers are infrastruc
 
 ## Current scope
 - Node.js + TypeScript + Fastify
-- React Email templates stored in `emails/`
+- React Email templates stored under `templates/$project/`
 - SMTP delivery via Nodemailer
 - API key per project
 - Zod validation
