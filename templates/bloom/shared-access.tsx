@@ -67,7 +67,7 @@ export function SharedAccessPermissionUpdatedEmail({
   actionUrl,
 }: SharedAccessPermissionUpdatedEmailProps) {
   return (
-    <BloomLayout preview={`A permissão do seu acesso ao Bloom foi atualizada.`}>
+    <BloomLayout preview="A permissão do seu acesso ao Bloom foi atualizada.">
       <Heading style={heading}>Permissão atualizada</Heading>
       <Text style={text}>Olá, {recipientName}.</Text>
       <Text style={text}>
