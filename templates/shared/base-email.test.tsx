@@ -11,15 +11,14 @@ function Footer() {
 }
 
 describe('BaseEmail', () => {
-  it('renders header, main children and footer', async () => {
+  it('renders header, main content and footer', async () => {
     const html = await render(
       <BaseEmail
         preview="Preview text"
         header={<Header />}
+        main={<div>MAIN CONTENT</div>}
         footer={<Footer />}
-      >
-        <div>MAIN CONTENT</div>
-      </BaseEmail>,
+      />,
     );
 
     expect(html).toContain('PROJECT HEADER');
@@ -30,9 +29,7 @@ describe('BaseEmail', () => {
 
   it('renders the default header and footer', async () => {
     const html = await render(
-      <BaseEmail preview="Preview text">
-        <div>MAIN CONTENT</div>
-      </BaseEmail>,
+      <BaseEmail preview="Preview text" main={<div>MAIN CONTENT</div>} />,
     );
 
     expect(html).toContain('MAILER');
