@@ -11,8 +11,8 @@ import {
 
 export interface BaseEmailProps {
   preview: string;
-  children: ReactNode;
   header?: ReactNode;
+  main: ReactNode;
   footer?: ReactNode;
   lang?: string;
 }
@@ -20,13 +20,13 @@ export interface BaseEmailProps {
 /**
  * Shared structural shell for project email templates.
  *
- * Project-specific templates should provide only their content through
- * `children`, while the header/footer can be customized when necessary.
+ * Project-specific templates provide their content through `main`, while
+ * header/footer can be customized with React nodes when necessary.
  */
 export default function BaseEmail({
   preview,
-  children,
   header,
+  main,
   footer,
   lang = 'pt-BR',
 }: BaseEmailProps) {
@@ -40,7 +40,7 @@ export default function BaseEmail({
             {header ?? <Text style={defaultHeader}>MAILER</Text>}
           </Section>
 
-          <Section style={mainSection}>{children}</Section>
+          <Section style={mainSection}>{main}</Section>
 
           <Section style={footerSection}>
             {footer ?? (
