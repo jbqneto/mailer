@@ -7,8 +7,10 @@ Templates in this directory are reusable building blocks shared by multiple proj
 `base-email.tsx` provides the common email structure:
 
 - Header
-- Main content (`children`)
+- Main content (`main`)
 - Footer
+
+Each content slot accepts a `ReactNode`, so callers can compose email-safe React Email components and regular React elements. The content is rendered through `react-email`; raw HTML strings are not injected into the document.
 
 Project templates can use the default header/footer or provide their own React nodes.
 
