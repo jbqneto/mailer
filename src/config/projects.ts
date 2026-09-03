@@ -3,6 +3,7 @@ import { PROJECT_DEFINITIONS, type ProjectDefinition } from './project-definitio
 import type { ProjectConfig } from '../domain/project.js';
 import { assertProductionValue } from './production-config.js';
 
+const emailSchema = z.string().email();
 const apiKeySchema = z.string().min(32);
 
 function required(prefix: string, suffix: string): string {
@@ -24,13 +25,15 @@ function optional(prefix: string, suffix: string): string | undefined {
 function loadProject(definition: ProjectDefinition): ProjectConfig {
   const prefix = definition.envPrefix;
   const apiKey = apiKeySchema.parse(required(prefix, 'API_KEY'));
-  const fromName = optional(prefix, 'FROM_NAME') ?? definition.id;
+  const fromEmail = emailSchema.parse(required(prefix, 'FROM_EMAIL'));
+  const fromName = optional(prefix, 'FROM_NAME') ?? fromEmail;
   const replyToRaw = optional(prefix, 'REPLY_TO');
-  const replyTo = replyToRaw ? z.string().email().parse(replyToRaw) : undefined;
+  const replyTo = replyToRaw ? emailSchema.parse(replyToRaw) : undefined;
 
   return {
     id: definition.id,
     apiKey,
+    fromEmail,
     fromName,
     ...(replyTo ? { replyTo } : {}),
     allowedTemplates: definition.allowedTemplates,
