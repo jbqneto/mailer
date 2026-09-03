@@ -1,14 +1,10 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import type {
-  EmailDelivery,
-  EmailDeliveryFilter,
-  EmailDeliveryReservation,
-  EmailDeliveryStore,
-} from '../../domain/email-delivery.js';
+import type { EmailDelivery, EmailDeliveryFilter, EmailDeliveryReservation, EmailDeliveryStore } from '../../domain/email-delivery.js';
 
 interface DeliveryRow {
   id: string;
   project_id: string;
+  email_account_id: string;
   template: string;
   recipients: unknown;
   subject: string;
@@ -26,10 +22,10 @@ function fromRow(row: DeliveryRow): EmailDelivery {
   if (!Array.isArray(row.recipients) || !row.recipients.every((item) => typeof item === 'string')) {
     throw new Error(`Invalid recipients stored for email delivery ${row.id}`);
   }
-
   return {
     id: row.id,
     projectId: row.project_id,
+    emailAccountId: row.email_account_id,
     template: row.template,
     to: row.recipients,
     subject: row.subject,
@@ -48,6 +44,7 @@ function toRow(delivery: EmailDelivery): DeliveryRow {
   return {
     id: delivery.id,
     project_id: delivery.projectId,
+    email_account_id: delivery.emailAccountId,
     template: delivery.template,
     recipients: delivery.to,
     subject: delivery.subject,
@@ -70,28 +67,16 @@ export class SupabaseEmailDeliveryStore implements EmailDeliveryStore {
   ) {}
 
   async reserve(delivery: EmailDelivery): Promise<EmailDeliveryReservation> {
-    const { data, error } = await this.client
-      .schema(this.schema)
-      .from(this.table)
-      .insert(toRow(delivery))
-      .select()
-      .maybeSingle();
-
+    const { data, error } = await this.client.schema(this.schema).from(this.table).insert(toRow(delivery)).select().maybeSingle();
     if (!error && data) return { kind: 'reserved', delivery: fromRow(data as DeliveryRow) };
-
-    // A unique violation means another request won the idempotency race.
     if (error?.code === '23505' && delivery.idempotencyKey) {
       const existing = await this.findByIdempotency(delivery.projectId, delivery.idempotencyKey);
       if (existing) return { kind: 'existing', delivery: existing };
     }
-
     throw new Error(`Could not reserve email delivery: ${error?.message ?? 'empty database response'}`);
   }
 
-  async update(
-    id: string,
-    patch: Partial<Pick<EmailDelivery, 'status' | 'acceptedAt' | 'failedAt' | 'providerMessageId' | 'errorCode'>>,
-  ): Promise<EmailDelivery> {
+  async update(id: string, patch: Partial<Pick<EmailDelivery, 'status' | 'acceptedAt' | 'failedAt' | 'providerMessageId' | 'errorCode'>>): Promise<EmailDelivery> {
     const values = {
       ...(patch.status ? { status: patch.status } : {}),
       ...(patch.acceptedAt ? { accepted_at: patch.acceptedAt } : {}),
@@ -99,25 +84,13 @@ export class SupabaseEmailDeliveryStore implements EmailDeliveryStore {
       ...(patch.providerMessageId ? { provider_message_id: patch.providerMessageId } : {}),
       ...(patch.errorCode ? { error_code: patch.errorCode } : {}),
     };
-    const { data, error } = await this.client
-      .schema(this.schema)
-      .from(this.table)
-      .update(values)
-      .eq('id', id)
-      .select()
-      .single();
+    const { data, error } = await this.client.schema(this.schema).from(this.table).update(values).eq('id', id).select().single();
     if (error || !data) throw new Error(`Could not update email delivery: ${error?.message ?? 'not found'}`);
     return fromRow(data as DeliveryRow);
   }
 
   async releaseIdempotency(projectId: string, idempotencyKey: string, deliveryId: string): Promise<void> {
-    const { error } = await this.client
-      .schema(this.schema)
-      .from(this.table)
-      .update({ idempotency_key: null, payload_hash: null })
-      .eq('id', deliveryId)
-      .eq('project_id', projectId)
-      .eq('idempotency_key', idempotencyKey);
+    const { error } = await this.client.schema(this.schema).from(this.table).update({ idempotency_key: null, payload_hash: null }).eq('id', deliveryId).eq('project_id', projectId).eq('idempotency_key', idempotencyKey);
     if (error) throw new Error(`Could not release email idempotency: ${error.message}`);
   }
 
@@ -138,13 +111,7 @@ export class SupabaseEmailDeliveryStore implements EmailDeliveryStore {
   }
 
   private async findByIdempotency(projectId: string, idempotencyKey: string): Promise<EmailDelivery | undefined> {
-    const { data, error } = await this.client
-      .schema(this.schema)
-      .from(this.table)
-      .select('*')
-      .eq('project_id', projectId)
-      .eq('idempotency_key', idempotencyKey)
-      .maybeSingle();
+    const { data, error } = await this.client.schema(this.schema).from(this.table).select('*').eq('project_id', projectId).eq('idempotency_key', idempotencyKey).maybeSingle();
     if (error) throw new Error(`Could not read idempotent email delivery: ${error.message}`);
     return data ? fromRow(data as DeliveryRow) : undefined;
   }
