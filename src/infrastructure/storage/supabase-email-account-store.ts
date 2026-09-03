@@ -29,6 +29,18 @@ const rowSchema = z.object({
 
 type EmailAccountRow = z.infer<typeof rowSchema>;
 
+function parseRow(data: unknown): EmailAccountRow {
+  const value = data as Record<string, unknown>;
+  return rowSchema.parse({
+    id: value.id,
+    name: value.name,
+    email: value.email,
+    provider: value.provider,
+    encrypted_credentials: value.encrypted_credentials,
+    active: value.active,
+  });
+}
+
 export class SupabaseEmailAccountStore implements EmailAccountStore {
   constructor(
     private readonly client: SupabaseClient,
@@ -49,7 +61,7 @@ export class SupabaseEmailAccountStore implements EmailAccountStore {
     if (error) throw new Error(`Failed to load email account: ${error.message}`);
     if (!data) return null;
 
-    return this.toDomain(rowSchema.parse(data));
+    return this.toDomain(parseRow(data));
   }
 
   async findDefaultForProject(projectId: string): Promise<EmailAccount | null> {
@@ -64,7 +76,7 @@ export class SupabaseEmailAccountStore implements EmailAccountStore {
     if (error) throw new Error(`Failed to load default email account: ${error.message}`);
     if (!data?.email_accounts) return null;
 
-    const account = rowSchema.parse(data.email_accounts);
+    const account = parseRow(data.email_accounts);
     if (!account.active) return null;
     return this.toDomain(account);
   }
