@@ -3,7 +3,7 @@ import type {
   EmailProvider,
   EmailSendResult,
 } from '../../domain/email-provider.js';
-import type { EmailAccount } from '../../domain/smtp-provider.js';
+import { SmtpProvider, type EmailAccount } from '../../domain/smtp-provider.js';
 import { SmtpStrategy } from './smtp-strategy.js';
 import type { SmtpAdapter } from './smtp-adapter.js';
 import type { RetryOptions } from './retry.js';
@@ -15,7 +15,7 @@ export class SmtpEmailProvider implements EmailProvider {
     maxAttempts: 3,
     initialDelayMs: 250,
   }) {
-    this.adapter = SmtpStrategy.create('PURELY_MAIL', retryOptions);
+    this.adapter = SmtpStrategy.create(SmtpProvider.PURELY_MAIL, retryOptions);
   }
 
   async send(account: EmailAccount, message: EmailMessage): Promise<EmailSendResult> {
