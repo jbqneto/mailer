@@ -24,11 +24,5 @@ alter table email_gateway.email_jobs
 create index if not exists email_jobs_email_account_idx
   on email_gateway.email_jobs (email_account_id);
 
--- Existing rows cannot be safely assigned to an account because the previous
--- implementation selected SMTP credentials from project configuration.
--- The gateway therefore requires the new column for all future records.
-alter table email_gateway.email_deliveries
-  alter column email_account_id set not null;
-
-alter table email_gateway.email_jobs
-  alter column email_account_id set not null;
+-- These columns remain nullable for compatibility with any rows created by
+-- the legacy SMTP configuration. New gateway writes always provide the id.
