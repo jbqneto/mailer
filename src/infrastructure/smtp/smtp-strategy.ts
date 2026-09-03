@@ -1,4 +1,4 @@
-import type { SmtpProvider } from '../../domain/smtp-provider.js';
+import { SmtpProvider } from '../../domain/smtp-provider.js';
 import type { SmtpAdapter } from './smtp-adapter.js';
 import { MailpitSmtpAdapter } from './providers/mailpit-smtp-adapter.js';
 import { PurelyMailSmtpAdapter } from './providers/purelymail-smtp-adapter.js';
