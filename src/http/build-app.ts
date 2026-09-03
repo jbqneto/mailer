@@ -6,15 +6,13 @@ import { SmtpProvider, type EmailAccount } from '../domain/smtp-provider.js';
 import {
   SendEmailUseCase,
   EmailDeliveryFailedError,
-  EmailAccountInactiveError,
-  EmailAccountNotFoundError,
   IdempotencyConflictError,
   previewEmailInputSchema,
   sendEmailInputSchema,
   TemplateNotAllowedError,
 } from '../application/send-email.js';
+import { EmailAccountInactiveError, EmailAccountNotFoundError } from '../application/email-account-resolver.js';
 import type { EmailAccountStore } from '../application/email-account-store.js';
-import { EmailAccountResolver } from '../application/email-account-resolver.js';
 import type { EmailDeliveryStore } from '../domain/email-delivery.js';
 import { InMemoryEmailDeliveryStore } from '../infrastructure/storage/in-memory-email-delivery-store.js';
 import { InMemoryEmailAccountStore } from '../infrastructure/storage/in-memory-email-account-store.js';
@@ -65,9 +63,7 @@ function createTestAccountStore(projects: readonly ProjectConfig[]): EmailAccoun
 export function buildApp({
   projects,
   emailProvider,
-  emailAccountStore = process.env.NODE_ENV === 'test'
-    ? createTestAccountStore(projects)
-    : new InMemoryEmailAccountStore(),
+  emailAccountStore = process.env.NODE_ENV === 'test' ? createTestAccountStore(projects) : new InMemoryEmailAccountStore(),
   adminAuth,
   adminLoginRateLimiter = new AdminLoginRateLimiter(),
   secureAdminCookie = false,
@@ -91,15 +87,8 @@ export function buildApp({
   app.addHook('onResponse', async (request, reply) => {
     const startedAt = requestStartedAt.get(request);
     const durationMs = startedAt === undefined ? 0 : Number(process.hrtime.bigint() - startedAt) / 1_000_000;
-    metrics.increment('email_gateway_http_requests_total', {
-      method: request.method,
-      route: request.routeOptions.url ?? 'unknown',
-      status_code: reply.statusCode.toString(),
-    });
-    metrics.observe('email_gateway_http_request_duration_ms', durationMs, {
-      method: request.method,
-      route: request.routeOptions.url ?? 'unknown',
-    });
+    metrics.increment('email_gateway_http_requests_total', { method: request.method, route: request.routeOptions.url ?? 'unknown', status_code: reply.statusCode.toString() });
+    metrics.observe('email_gateway_http_request_duration_ms', durationMs, { method: request.method, route: request.routeOptions.url ?? 'unknown' });
   });
 
   function enforceRateLimit(projectId: string, reply: FastifyReply): boolean {
@@ -116,9 +105,7 @@ export function buildApp({
 
   app.post('/admin/login', async (request, reply) => {
     const rateLimitKey = request.ip;
-    if (!adminLoginRateLimiter.canAttempt(rateLimitKey)) {
-      return reply.code(429).header('Retry-After', adminLoginRateLimiter.retryAfterSeconds(rateLimitKey).toString()).send({ error: 'rate_limited', message: 'Too many failed login attempts. Try again later.' });
-    }
+    if (!adminLoginRateLimiter.canAttempt(rateLimitKey)) return reply.code(429).header('Retry-After', adminLoginRateLimiter.retryAfterSeconds(rateLimitKey).toString()).send({ error: 'rate_limited', message: 'Too many failed login attempts. Try again later.' });
     const parsed = z.object({ username: z.string().min(1), password: z.string().min(1) }).strict().safeParse(request.body);
     if (!parsed.success) {
       adminLoginRateLimiter.recordFailure(rateLimitKey);
@@ -180,7 +167,6 @@ export function buildApp({
     if (!enforceRateLimit(project.id, reply)) return;
     const parsed = sendEmailInputSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: 'invalid_request', issues: parsed.error.issues.map((issue) => ({ path: issue.path.join('.'), message: issue.message })) });
-
     const headerKey = request.headers['idempotency-key'];
     if (Array.isArray(headerKey)) return reply.code(400).send({ error: 'invalid_request', message: 'Idempotency-Key must be a single value' });
     if (headerKey !== undefined && (headerKey.trim().length < 1 || headerKey.trim().length > 256)) return reply.code(400).send({ error: 'invalid_request', message: 'Idempotency-Key must contain 1 to 256 characters' });
