@@ -29,6 +29,11 @@ const runtimeEnvSchema = z.object({
     (value) => (value === '' ? undefined : value),
     z.string().min(1).optional(),
   ),
+  SUPABASE_SCHEMA: z.string().regex(/^[a-z_][a-z0-9_]*$/).default('mailer'),
+  MAILER_MASTER_KEY: z.preprocess(
+    (value) => (value === '' ? undefined : value),
+    z.string().min(1).optional(),
+  ),
 });
 
 export const runtimeEnv = runtimeEnvSchema.parse(process.env);
