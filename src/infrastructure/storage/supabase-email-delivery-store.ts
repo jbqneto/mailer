@@ -4,7 +4,7 @@ import type { EmailDelivery, EmailDeliveryFilter, EmailDeliveryReservation, Emai
 interface DeliveryRow {
   id: string;
   project_id: string;
-  email_account_id: string;
+  email_account_id: string | null;
   template: string;
   recipients: unknown;
   subject: string;
@@ -19,13 +19,11 @@ interface DeliveryRow {
 }
 
 function fromRow(row: DeliveryRow): EmailDelivery {
-  if (!Array.isArray(row.recipients) || !row.recipients.every((item) => typeof item === 'string')) {
-    throw new Error(`Invalid recipients stored for email delivery ${row.id}`);
-  }
+  if (!Array.isArray(row.recipients) || !row.recipients.every((item) => typeof item === 'string')) throw new Error(`Invalid recipients stored for email delivery ${row.id}`);
   return {
     id: row.id,
     projectId: row.project_id,
-    emailAccountId: row.email_account_id,
+    ...(row.email_account_id ? { emailAccountId: row.email_account_id } : {}),
     template: row.template,
     to: row.recipients,
     subject: row.subject,
@@ -44,7 +42,7 @@ function toRow(delivery: EmailDelivery): DeliveryRow {
   return {
     id: delivery.id,
     project_id: delivery.projectId,
-    email_account_id: delivery.emailAccountId,
+    email_account_id: delivery.emailAccountId ?? null,
     template: delivery.template,
     recipients: delivery.to,
     subject: delivery.subject,
@@ -60,11 +58,7 @@ function toRow(delivery: EmailDelivery): DeliveryRow {
 }
 
 export class SupabaseEmailDeliveryStore implements EmailDeliveryStore {
-  constructor(
-    private readonly client: SupabaseClient,
-    private readonly schema = 'email_gateway',
-    private readonly table = 'email_deliveries',
-  ) {}
+  constructor(private readonly client: SupabaseClient, private readonly schema = 'email_gateway', private readonly table = 'email_deliveries') {}
 
   async reserve(delivery: EmailDelivery): Promise<EmailDeliveryReservation> {
     const { data, error } = await this.client.schema(this.schema).from(this.table).insert(toRow(delivery)).select().maybeSingle();
