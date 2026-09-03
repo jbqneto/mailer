@@ -6,7 +6,7 @@ alter table email_gateway.email_deliveries
 alter table email_gateway.email_deliveries
   add constraint email_deliveries_email_account_fk
   foreign key (email_account_id)
-  references mailer.email_accounts(id)
+  references email_gateway.email_accounts(id)
   on delete restrict;
 
 create index if not exists email_deliveries_email_account_idx
@@ -18,7 +18,7 @@ alter table email_gateway.email_jobs
 alter table email_gateway.email_jobs
   add constraint email_jobs_email_account_fk
   foreign key (email_account_id)
-  references mailer.email_accounts(id)
+  references email_gateway.email_accounts(id)
   on delete restrict;
 
 create index if not exists email_jobs_email_account_idx
