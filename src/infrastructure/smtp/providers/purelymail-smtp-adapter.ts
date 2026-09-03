@@ -18,15 +18,15 @@ export class PurelyMailSmtpAdapter implements SmtpAdapter {
   async send(account: EmailAccount, message: EmailMessage): Promise<EmailSendResult> {
     const info = await withRetry(
       () => this.getTransporter(account).sendMail({
-        from: account.email,
+        from: message.from ?? account.email,
         to: message.to,
         subject: message.subject,
         html: message.html,
         text: message.text,
+        ...(message.replyTo ? { replyTo: message.replyTo } : {}),
       }),
       this.retryOptions,
     );
-
     return { messageId: info.messageId };
   }
 
@@ -42,15 +42,11 @@ export class PurelyMailSmtpAdapter implements SmtpAdapter {
   private getTransporter(account: EmailAccount): Transporter {
     const existing = this.transporters.get(account.id);
     if (existing) return existing;
-
     const transporter = nodemailer.createTransport({
       host: 'smtp.purelymail.com',
       port: 465,
       secure: true,
-      auth: {
-        user: account.credentials.username,
-        pass: account.credentials.password,
-      },
+      auth: { user: account.credentials.username, pass: account.credentials.password },
       pool: true,
       maxConnections: 3,
       maxMessages: 100,
@@ -58,7 +54,6 @@ export class PurelyMailSmtpAdapter implements SmtpAdapter {
       greetingTimeout: 10_000,
       socketTimeout: 30_000,
     });
-
     this.transporters.set(account.id, transporter);
     return transporter;
   }
