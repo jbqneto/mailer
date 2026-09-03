@@ -1,20 +1,41 @@
 import { randomUUID } from 'node:crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import type {
-  EmailJob,
-  EmailJobHandler,
-  EmailJobQueue,
-} from '../../application/email-job-queue.js';
+import type { EmailJob, EmailJobHandler, EmailJobQueue } from '../../application/email-job-queue.js';
 
 interface JobRow {
   id: string;
   delivery_id: string;
   project_id: string;
+  email_account_id: string;
   template: string;
   message: unknown;
   attempts: number;
   max_attempts: number;
   status: 'queued' | 'processing' | 'completed' | 'failed';
+}
+
+function fromRow(row: JobRow): EmailJob {
+  if (!row.message || typeof row.message !== 'object') throw new Error(`Invalid message stored for email job ${row.id}`);
+  const message = row.message as Record<string, unknown>;
+  const recipients = message.to;
+  if (typeof message.subject !== 'string' || typeof message.html !== 'string' || typeof message.text !== 'string') throw new Error(`Invalid message fields stored for email job ${row.id}`);
+  if (typeof recipients !== 'string' && (!Array.isArray(recipients) || !recipients.every((item) => typeof item === 'string'))) throw new Error(`Invalid recipients stored for email job ${row.id}`);
+
+  return {
+    id: row.id,
+    deliveryId: row.delivery_id,
+    projectId: row.project_id,
+    emailAccountId: row.email_account_id,
+    template: row.template,
+    message: {
+      to: recipients,
+      subject: message.subject,
+      html: message.html,
+      text: message.text,
+      ...(message.from && typeof message.from === 'object' ? { from: message.from as { name?: string; address: string } } : {}),
+      ...(typeof message.replyTo === 'string' ? { replyTo: message.replyTo } : {}),
+    },
+  };
 }
 
 export interface SupabaseEmailJobQueueOptions {
@@ -31,33 +52,6 @@ export interface SupabaseEmailJobQueueOptions {
   pollIntervalMs?: number;
   onJobError?: (job: EmailJob, error: unknown) => void;
   onPollError?: (error: unknown) => void;
-}
-
-function fromRow(row: JobRow): EmailJob {
-  if (!row.message || typeof row.message !== 'object') {
-    throw new Error(`Invalid message stored for email job ${row.id}`);
-  }
-  const message = row.message as Record<string, unknown>;
-  const recipients = message.to;
-  if (typeof message.subject !== 'string' || typeof message.html !== 'string' || typeof message.text !== 'string') {
-    throw new Error(`Invalid message fields stored for email job ${row.id}`);
-  }
-  if (typeof recipients !== 'string' && (!Array.isArray(recipients) || !recipients.every((item) => typeof item === 'string'))) {
-    throw new Error(`Invalid recipients stored for email job ${row.id}`);
-  }
-
-  return {
-    id: row.id,
-    deliveryId: row.delivery_id,
-    projectId: row.project_id,
-    template: row.template,
-    message: {
-      to: recipients,
-      subject: message.subject,
-      html: message.html,
-      text: message.text,
-    },
-  };
 }
 
 export class SupabaseEmailJobQueue implements EmailJobQueue {
@@ -91,7 +85,6 @@ export class SupabaseEmailJobQueue implements EmailJobQueue {
     this.pollIntervalMs = options.pollIntervalMs ?? 1_000;
     this.onJobError = options.onJobError ?? (() => undefined);
     this.onPollError = options.onPollError ?? (() => undefined);
-
     if (!Number.isInteger(this.concurrency) || this.concurrency < 1) throw new Error('Queue concurrency must be a positive integer');
     if (!Number.isInteger(this.maxAttempts) || this.maxAttempts < 1) throw new Error('Queue maxAttempts must be a positive integer');
     if (!Number.isInteger(this.retryDelayMs) || this.retryDelayMs < 0) throw new Error('Queue retryDelayMs must be a non-negative integer');
@@ -104,6 +97,7 @@ export class SupabaseEmailJobQueue implements EmailJobQueue {
       id: job.id,
       delivery_id: job.deliveryId,
       project_id: job.projectId,
+      email_account_id: job.emailAccountId,
       template: job.template,
       message: job.message,
       status: 'queued',
@@ -145,7 +139,6 @@ export class SupabaseEmailJobQueue implements EmailJobQueue {
       p_lease_seconds: this.leaseSeconds,
     });
     if (error) throw new Error(`Could not claim email jobs: ${error.message}`);
-
     const rows = data as JobRow[] | null ?? [];
     const jobs = rows.map(fromRow);
     await Promise.all(jobs.map((job, index) => this.processClaimedJob(job, rows[index]?.attempts ?? 1)));
@@ -158,24 +151,12 @@ export class SupabaseEmailJobQueue implements EmailJobQueue {
       await this.update(job.id, { status: 'completed', locked_until: null, locked_by: null });
     } catch (error) {
       if (attempts >= this.maxAttempts || !isRetryableQueueError(error)) {
-        await this.update(job.id, {
-          status: 'failed',
-          locked_until: null,
-          locked_by: null,
-          last_error: safeJobError(error),
-        });
+        await this.update(job.id, { status: 'failed', locked_until: null, locked_by: null, last_error: safeJobError(error) });
         this.onJobError(job, error);
         return;
       }
-
       const delay = this.retryDelayMs * 2 ** (attempts - 1);
-      await this.update(job.id, {
-        status: 'queued',
-        available_at: new Date(Date.now() + delay).toISOString(),
-        locked_until: null,
-        locked_by: null,
-        last_error: safeJobError(error),
-      });
+      await this.update(job.id, { status: 'queued', available_at: new Date(Date.now() + delay).toISOString(), locked_until: null, locked_by: null, last_error: safeJobError(error) });
     }
   }
 
