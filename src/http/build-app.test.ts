@@ -3,7 +3,7 @@ import type {
   EmailMessage,
   EmailProvider,
 } from '../domain/email-provider.js';
-import type { ProjectConfig } from '../domain/project.js';
+import { SmtpProvider, type EmailAccount } from '../domain/smtp-provider.js';
 import {
   AdminAuth,
   AdminLoginRateLimiter,
@@ -15,7 +15,7 @@ class FakeEmailProvider implements EmailProvider {
   readonly sent: EmailMessage[] = [];
 
   async send(
-    _project: ProjectConfig,
+    _account: EmailAccount,
     message: EmailMessage,
   ): Promise<{ messageId: string }> {
     this.sent.push(message);
@@ -29,18 +29,21 @@ class FailingEmailProvider implements EmailProvider {
   }
 }
 
-const project: ProjectConfig = {
+const project = {
   id: 'preview-project',
   apiKey: 'p'.repeat(32),
   fromEmail: 'noreply@example.com',
   fromName: 'Preview Project',
-  smtp: {
-    host: 'localhost',
-    port: 1025,
-    secure: false,
-    auth: false,
-  },
-  allowedTemplates: ['*'],
+  allowedTemplates: ['*'] as const,
+};
+
+const testAccount: EmailAccount = {
+  id: '00000000-0000-4000-8000-000000000001',
+  name: 'test-default',
+  email: 'noreply@example.com',
+  provider: SmtpProvider.PURELY_MAIL,
+  credentials: { username: 'test', password: 'test' },
+  active: true,
 };
 
 const adminAuth = new AdminAuth({
@@ -494,12 +497,12 @@ describe('POST /v1/emails', () => {
       private attempts = 0;
 
       override async send(
-        projectConfig: ProjectConfig,
+        account: EmailAccount,
         message: EmailMessage,
       ): Promise<{ messageId: string }> {
         this.attempts += 1;
         if (this.attempts === 1) throw new Error('temporary SMTP failure');
-        return super.send(projectConfig, message);
+        return super.send(account, message);
       }
     }
 
@@ -547,8 +550,8 @@ describe('POST /v1/emails', () => {
     const started = new Promise<void>((resolve) => { markStarted = resolve; });
     const released = new Promise<void>((resolve) => { release = resolve; });
     class SlowProvider extends FakeEmailProvider {
-      override async send(projectConfig: ProjectConfig, message: EmailMessage) {
-        const sending = super.send(projectConfig, message);
+      override async send(account: EmailAccount, message: EmailMessage) {
+        const sending = super.send(account, message);
         markStarted();
         await released;
         return sending;
