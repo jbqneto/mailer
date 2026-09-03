@@ -1,5 +1,6 @@
 import type { SmtpProvider } from '../../domain/smtp-provider.js';
 import type { SmtpAdapter } from './smtp-adapter.js';
+import { MailpitSmtpAdapter } from './providers/mailpit-smtp-adapter.js';
 import { PurelyMailSmtpAdapter } from './providers/purelymail-smtp-adapter.js';
 
 export class UnsupportedSmtpProviderError extends Error {
@@ -17,8 +18,10 @@ export interface SmtpStrategyOptions {
 export class SmtpStrategy {
   static create(provider: SmtpProvider, options: SmtpStrategyOptions): SmtpAdapter {
     switch (provider) {
-      case 'PURELY_MAIL':
+      case SmtpProvider.PURELY_MAIL:
         return new PurelyMailSmtpAdapter(options);
+      case SmtpProvider.MAILPIT:
+        return new MailpitSmtpAdapter();
       default:
         throw new UnsupportedSmtpProviderError(provider);
     }
