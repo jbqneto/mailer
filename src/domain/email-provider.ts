@@ -1,10 +1,15 @@
-import type { ProjectConfig } from './project.js';
+import type { EmailAccount } from './smtp-provider.js';
 
 export interface EmailMessage {
   to: string | string[];
   subject: string;
   html: string;
   text: string;
+  from?: {
+    name?: string;
+    address: string;
+  };
+  replyTo?: string;
 }
 
 export interface EmailSendResult {
@@ -12,7 +17,7 @@ export interface EmailSendResult {
 }
 
 export interface EmailProvider {
-  send(project: ProjectConfig, message: EmailMessage): Promise<EmailSendResult>;
-  verify?(project: ProjectConfig): Promise<void>;
+  send(account: EmailAccount, message: EmailMessage): Promise<EmailSendResult>;
+  verify?(account: EmailAccount): Promise<void>;
   close?(): Promise<void>;
 }
