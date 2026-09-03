@@ -13,6 +13,11 @@ const encryptedSecretSchema = z.object({
   ciphertext: z.string().min(1),
 }).strict();
 
+const credentialsSchema = z.object({
+  username: z.string().min(1),
+  password: z.string().min(1),
+}).strict();
+
 const rowSchema = z.object({
   id: z.string().uuid(),
   name: z.string().min(1),
@@ -35,7 +40,7 @@ export class SupabaseEmailAccountStore implements EmailAccountStore {
     const { data, error } = await this.client
       .schema(this.schema)
       .from('email_accounts')
-      .select('id, name, email, provider, encrypted_credentials, active')
+      .select('id, name, email, provider, encrypted_credentials, active, project_email_accounts!inner(project_id)')
       .eq('name', name)
       .eq('active', true)
       .eq('project_email_accounts.project_id', projectId)
@@ -65,13 +70,11 @@ export class SupabaseEmailAccountStore implements EmailAccountStore {
   }
 
   private toDomain(row: EmailAccountRow): EmailAccount {
-    const credentials = JSON.parse(this.secretBox.decrypt(row.encrypted_credentials as EncryptedSecret)) as {
-      username?: unknown;
-      password?: unknown;
-    };
-
-    if (typeof credentials.username !== 'string' || typeof credentials.password !== 'string') {
-      throw new Error(`Invalid credentials for email account "${row.id}"`);
+    let decrypted: unknown;
+    try {
+      decrypted = JSON.parse(this.secretBox.decrypt(row.encrypted_credentials as EncryptedSecret));
+    } catch {
+      throw new Error(`Failed to decrypt credentials for email account "${row.id}"`);
     }
 
     return {
@@ -79,10 +82,7 @@ export class SupabaseEmailAccountStore implements EmailAccountStore {
       name: row.name,
       email: row.email,
       provider: row.provider,
-      credentials: {
-        username: credentials.username,
-        password: credentials.password,
-      },
+      credentials: credentialsSchema.parse(decrypted),
       active: row.active,
     };
   }
