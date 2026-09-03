@@ -48,13 +48,25 @@ export class SupabaseEmailAccountStore implements EmailAccountStore {
     private readonly secretBox: SecretBox,
   ) {}
 
+  async findById(id: string): Promise<EmailAccount | null> {
+    const { data, error } = await this.client
+      .schema(this.schema)
+      .from('email_accounts')
+      .select('id, name, email, provider, encrypted_credentials, active')
+      .eq('id', id)
+      .maybeSingle();
+
+    if (error) throw new Error(`Failed to load email account: ${error.message}`);
+    if (!data) return null;
+    return this.toDomain(parseRow(data));
+  }
+
   async findByNameForProject(projectId: string, name: string): Promise<EmailAccount | null> {
     const { data, error } = await this.client
       .schema(this.schema)
       .from('email_accounts')
       .select('id, name, email, provider, encrypted_credentials, active, project_email_accounts!inner(project_id)')
       .eq('name', name)
-      .eq('active', true)
       .eq('project_email_accounts.project_id', projectId)
       .maybeSingle();
 
@@ -76,9 +88,7 @@ export class SupabaseEmailAccountStore implements EmailAccountStore {
     if (error) throw new Error(`Failed to load default email account: ${error.message}`);
     if (!data?.email_accounts) return null;
 
-    const account = parseRow(data.email_accounts);
-    if (!account.active) return null;
-    return this.toDomain(account);
+    return this.toDomain(parseRow(data.email_accounts));
   }
 
   private toDomain(row: EmailAccountRow): EmailAccount {
