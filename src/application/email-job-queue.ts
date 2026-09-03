@@ -4,6 +4,7 @@ export interface EmailJob {
   id: string;
   deliveryId: string;
   projectId: string;
+  emailAccountId: string;
   template: string;
   message: EmailMessage;
 }
