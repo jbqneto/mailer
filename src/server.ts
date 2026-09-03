@@ -9,6 +9,7 @@ import { buildApp } from './http/build-app.js';
 import { SmtpEmailProvider } from './infrastructure/smtp/smtp-email-provider.js';
 import { AdminAuth, loadAdminCredentials } from './security/admin-auth.js';
 import { createEmailDeliveryStore } from './infrastructure/storage/create-email-delivery-store.js';
+import { createEmailAccountStore } from './infrastructure/storage/create-email-account-store.js';
 import { InMemoryRateLimiter } from './infrastructure/rate-limit/in-memory-rate-limiter.js';
 import { InMemoryEmailJobQueue } from './infrastructure/queue/in-memory-email-job-queue.js';
 import { SendEmailUseCase } from './application/send-email.js';
@@ -16,22 +17,30 @@ import { createClient } from '@supabase/supabase-js';
 import { SupabaseEmailJobQueue } from './infrastructure/queue/supabase-email-job-queue.js';
 
 const projects = loadProjects();
+
+if (!runtimeEnv.SUPABASE_URL || !runtimeEnv.SUPABASE_SERVICE_ROLE_KEY || !runtimeEnv.MAILER_MASTER_KEY) {
+  throw new Error('SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY and MAILER_MASTER_KEY are required for email account storage');
+}
+
+const emailAccountStore = createEmailAccountStore({
+  supabaseUrl: runtimeEnv.SUPABASE_URL,
+  serviceRoleKey: runtimeEnv.SUPABASE_SERVICE_ROLE_KEY,
+  schema: runtimeEnv.SUPABASE_SCHEMA,
+  masterKey: runtimeEnv.MAILER_MASTER_KEY,
+});
 const emailProvider = new SmtpEmailProvider({
   maxAttempts: runtimeEnv.SMTP_MAX_ATTEMPTS,
   initialDelayMs: runtimeEnv.SMTP_RETRY_DELAY_MS,
 });
 const deliveryStore = createEmailDeliveryStore();
-const workerUseCase = new SendEmailUseCase(emailProvider, deliveryStore);
-const projectsById = new Map(projects.map((project) => [project.id, project]));
+const workerUseCase = new SendEmailUseCase(emailProvider, deliveryStore, emailAccountStore);
 const adminAuth = new AdminAuth(loadAdminCredentials());
 const rateLimiter = new InMemoryRateLimiter({
   maxRequests: runtimeEnv.RATE_LIMIT_MAX_REQUESTS,
   windowMs: runtimeEnv.RATE_LIMIT_WINDOW_SECONDS * 1000,
 });
 const jobHandler = async (job: import('./application/email-job-queue.js').EmailJob): Promise<void> => {
-  const project = projectsById.get(job.projectId);
-  if (!project) throw new Error(`Project ${job.projectId} was not found for email job`);
-  await workerUseCase.processJob(job, project);
+  await workerUseCase.processJob(job);
 };
 
 const queueOptions = {
@@ -48,8 +57,8 @@ const emailQueue = runtimeEnv.QUEUE_STORE === 'supabase'
   ? new SupabaseEmailJobQueue({
       ...queueOptions,
       client: createClient(
-        runtimeEnv.SUPABASE_URL!,
-        runtimeEnv.SUPABASE_SERVICE_ROLE_KEY!,
+        runtimeEnv.SUPABASE_URL,
+        runtimeEnv.SUPABASE_SERVICE_ROLE_KEY,
         { auth: { autoRefreshToken: false, persistSession: false } },
       ),
     })
@@ -58,6 +67,7 @@ const emailQueue = runtimeEnv.QUEUE_STORE === 'supabase'
 const app = buildApp({
   projects,
   emailProvider,
+  emailAccountStore,
   adminAuth,
   deliveryStore,
   rateLimiter,
@@ -74,10 +84,7 @@ emailQueue.start?.();
 
 async function start(): Promise<void> {
   try {
-    await app.listen({
-      host: runtimeEnv.HOST,
-      port: runtimeEnv.PORT,
-    });
+    await app.listen({ host: runtimeEnv.HOST, port: runtimeEnv.PORT });
   } catch (error) {
     app.log.error(error);
     process.exit(1);
@@ -86,7 +93,6 @@ async function start(): Promise<void> {
 
 async function shutdown(signal: string): Promise<void> {
   app.log.info({ signal }, 'shutting down');
-
   try {
     await app.close();
     await emailQueue.close();
