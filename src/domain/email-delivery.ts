@@ -3,7 +3,7 @@ export type EmailDeliveryStatus = 'processing' | 'accepted' | 'failed';
 export interface EmailDelivery {
   id: string;
   projectId: string;
-  emailAccountId?: string;
+  emailAccountId: string;
   template: string;
   to: string[];
   subject: string;
