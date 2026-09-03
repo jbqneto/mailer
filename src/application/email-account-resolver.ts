@@ -26,8 +26,21 @@ export class EmailAccountResolver {
     const account = name
       ? await this.store.findByNameForProject(projectId, name)
       : await this.store.findDefaultForProject(projectId);
+    return this.assertUsable(account, projectId, name);
+  }
 
-    if (!account) throw new EmailAccountNotFoundError(projectId, name);
+  async resolveById(id: string, projectId: string): Promise<EmailAccount> {
+    const account = await this.store.findById(id);
+    if (!account) throw new EmailAccountNotFoundError(projectId, id);
+    return this.assertUsable(account, projectId);
+  }
+
+  private assertUsable(
+    account: EmailAccount | null,
+    projectId: string,
+    requestedName?: string,
+  ): EmailAccount {
+    if (!account) throw new EmailAccountNotFoundError(projectId, requestedName);
     if (!account.active) throw new EmailAccountInactiveError(account.id);
     return account;
   }
