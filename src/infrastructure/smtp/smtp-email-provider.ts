@@ -1,86 +1,38 @@
-import nodemailer, { type Transporter } from 'nodemailer';
 import type {
   EmailMessage,
   EmailProvider,
   EmailSendResult,
 } from '../../domain/email-provider.js';
-import type { ProjectConfig } from '../../domain/project.js';
-import { withRetry, type RetryOptions } from './retry.js';
+import type { EmailAccount } from '../../domain/smtp-provider.js';
+import { SmtpStrategy } from './smtp-strategy.js';
+import type { SmtpAdapter } from './smtp-adapter.js';
+import type { RetryOptions } from './retry.js';
 
 export class SmtpEmailProvider implements EmailProvider {
-  private readonly transporters = new Map<string, Transporter>();
+  private readonly adapter: SmtpAdapter;
 
-  constructor(private readonly retryOptions: RetryOptions = {
+  constructor(retryOptions: RetryOptions = {
     maxAttempts: 3,
     initialDelayMs: 250,
-  }) {}
-
-  async send(
-    project: ProjectConfig,
-    message: EmailMessage,
-  ): Promise<EmailSendResult> {
-    const transporter = this.getTransporter(project);
-
-    const info = await withRetry(
-      () => transporter.sendMail({
-        from: {
-          name: project.fromName,
-          address: project.fromEmail,
-        },
-        to: message.to,
-        subject: message.subject,
-        html: message.html,
-        text: message.text,
-        ...(project.replyTo ? { replyTo: project.replyTo } : {}),
-      }),
-      this.retryOptions,
-    );
-
-    return {
-      messageId: info.messageId,
-    };
+  }) {
+    this.adapter = SmtpStrategy.create('PURELY_MAIL', retryOptions);
   }
 
-  async verify(project: ProjectConfig): Promise<void> {
-    await this.getTransporter(project).verify();
+  async send(account: EmailAccount, message: EmailMessage): Promise<EmailSendResult> {
+    if (account.provider !== this.adapter.provider) {
+      throw new Error(`SMTP provider ${account.provider} is not supported by this gateway`);
+    }
+    return this.adapter.send(account, message);
+  }
+
+  async verify(account: EmailAccount): Promise<void> {
+    if (account.provider !== this.adapter.provider) {
+      throw new Error(`SMTP provider ${account.provider} is not supported by this gateway`);
+    }
+    await this.adapter.verify(account);
   }
 
   async close(): Promise<void> {
-    const closeOperations = [...this.transporters.values()].map((transporter) =>
-      transporter.close(),
-    );
-
-    await Promise.all(closeOperations);
-    this.transporters.clear();
-  }
-
-  private getTransporter(project: ProjectConfig): Transporter {
-    const existing = this.transporters.get(project.id);
-    if (existing) {
-      return existing;
-    }
-
-    const transporter = nodemailer.createTransport({
-      host: project.smtp.host,
-      port: project.smtp.port,
-      secure: project.smtp.secure,
-      ...(project.smtp.auth
-        ? {
-            auth: {
-              user: project.smtp.auth.user,
-              pass: project.smtp.auth.password,
-            },
-          }
-        : {}),
-      pool: true,
-      maxConnections: 3,
-      maxMessages: 100,
-      connectionTimeout: 10_000,
-      greetingTimeout: 10_000,
-      socketTimeout: 30_000,
-    });
-
-    this.transporters.set(project.id, transporter);
-    return transporter;
+    await this.adapter.close();
   }
 }
