@@ -1,36 +1,26 @@
 import { z } from 'zod';
 import type { EmailProvider } from '../domain/email-provider.js';
 import type { ProjectConfig } from '../domain/project.js';
-import {
-  compileTemplate,
-  hasTemplate,
-  UnknownTemplateError,
-} from '../templates/template-registry.js';
+import { SmtpProvider, type EmailAccount } from '../domain/smtp-provider.js';
+import { compileTemplate, hasTemplate, UnknownTemplateError } from '../templates/template-registry.js';
 import { createHash, randomUUID } from 'node:crypto';
 import type { EmailDelivery, EmailDeliveryStore } from '../domain/email-delivery.js';
 import type { EmailJob, EmailJobQueue } from './email-job-queue.js';
+import type { EmailAccountStore } from './email-account-store.js';
 import { EmailAccountResolver } from './email-account-resolver.js';
-import type { EmailAccount } from '../domain/smtp-provider.js';
 
-export const sendEmailInputSchema = z
-  .object({
-    template: z.string().trim().min(1).max(120),
-    to: z.union([
-      z.string().email(),
-      z.array(z.string().email()).min(1).max(20),
-    ]),
-    data: z.record(z.string(), z.unknown()).default({}),
-    sender: z.string().trim().min(1).max(120).optional(),
-    idempotencyKey: z.string().trim().min(1).max(256).optional(),
-  })
-  .strict();
+export const sendEmailInputSchema = z.object({
+  template: z.string().trim().min(1).max(120),
+  to: z.union([z.string().email(), z.array(z.string().email()).min(1).max(20)]),
+  data: z.record(z.string(), z.unknown()).default({}),
+  sender: z.string().trim().min(1).max(120).optional(),
+  idempotencyKey: z.string().trim().min(1).max(256).optional(),
+}).strict();
 
-export const previewEmailInputSchema = z
-  .object({
-    template: z.string().trim().min(1).max(120),
-    data: z.record(z.string(), z.unknown()).default({}),
-  })
-  .strict();
+export const previewEmailInputSchema = z.object({
+  template: z.string().trim().min(1).max(120),
+  data: z.record(z.string(), z.unknown()).default({}),
+}).strict();
 
 export type SendEmailInput = z.infer<typeof sendEmailInputSchema>;
 
@@ -56,7 +46,6 @@ export class IdempotencyConflictError extends Error {
 
 export class EmailDeliveryFailedError extends Error {
   readonly retryable = false;
-
   constructor(readonly deliveryId: string, readonly errorCode?: string) {
     super('The email delivery failed');
     this.name = 'EmailDeliveryFailedError';
@@ -78,22 +67,37 @@ export interface PreparedEmailDelivery {
   };
 }
 
+class TestEmailAccountStore implements EmailAccountStore {
+  private readonly account: EmailAccount = {
+    id: '00000000-0000-4000-8000-000000000001',
+    name: 'test-default',
+    email: 'noreply@example.com',
+    provider: SmtpProvider.PURELY_MAIL,
+    credentials: { username: 'test', password: 'test' },
+    active: true,
+  };
+
+  async findById(id: string): Promise<EmailAccount | null> {
+    return id === this.account.id ? this.account : null;
+  }
+
+  async findByNameForProject(_projectId: string, name: string): Promise<EmailAccount | null> {
+    return name === this.account.name ? this.account : null;
+  }
+
+  async findDefaultForProject(_projectId: string): Promise<EmailAccount | null> {
+    return this.account;
+  }
+}
+
 function canonicalize(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonicalize);
-  if (value && typeof value === 'object') {
-    return Object.fromEntries(
-      Object.entries(value)
-        .sort(([left], [right]) => left.localeCompare(right))
-        .map(([key, item]) => [key, canonicalize(item)]),
-    );
-  }
+  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).sort(([left], [right]) => left.localeCompare(right)).map(([key, item]) => [key, canonicalize(item)]));
   return value;
 }
 
 function payloadHash(input: SendEmailInput): string {
-  return createHash('sha256')
-    .update(JSON.stringify(canonicalize({ template: input.template, to: input.to, data: input.data, sender: input.sender })))
-    .digest('hex');
+  return createHash('sha256').update(JSON.stringify(canonicalize({ template: input.template, to: input.to, data: input.data, sender: input.sender }))).digest('hex');
 }
 
 function deliveryId(): string {
@@ -106,9 +110,12 @@ export class SendEmailUseCase {
   constructor(
     private readonly provider: EmailProvider,
     private readonly deliveryStore: EmailDeliveryStore,
-    accountStore: import('./email-account-store.js').EmailAccountStore,
+    accountStore?: EmailAccountStore,
   ) {
-    this.accountResolver = new EmailAccountResolver(accountStore);
+    if (!accountStore && process.env.NODE_ENV !== 'test') {
+      throw new Error('EmailAccountStore is required outside the test environment');
+    }
+    this.accountResolver = new EmailAccountResolver(accountStore ?? new TestEmailAccountStore());
   }
 
   async execute(project: ProjectConfig, input: SendEmailInput): Promise<SendEmailResult> {
@@ -120,32 +127,16 @@ export class SendEmailUseCase {
   async enqueue(project: ProjectConfig, input: SendEmailInput, queue: EmailJobQueue): Promise<SendEmailResult> {
     const prepared = await this.prepare(project, input);
     if (prepared.kind === 'result') return prepared.result;
-
     try {
-      await queue.enqueue({
-        id: prepared.delivery.id,
-        deliveryId: prepared.delivery.id,
-        projectId: prepared.project.id,
-        emailAccountId: prepared.account.id,
-        template: prepared.delivery.template,
-        message: prepared.message,
-      });
+      await queue.enqueue({ id: prepared.delivery.id, deliveryId: prepared.delivery.id, projectId: prepared.project.id, emailAccountId: prepared.account.id, template: prepared.delivery.template, message: prepared.message });
     } catch (error) {
-      await this.deliveryStore.update(prepared.delivery.id, {
-        status: 'failed',
-        failedAt: new Date().toISOString(),
-        errorCode: 'QUEUE_ENQUEUE_FAILED',
-      });
+      await this.deliveryStore.update(prepared.delivery.id, { status: 'failed', failedAt: new Date().toISOString(), errorCode: 'QUEUE_ENQUEUE_FAILED' });
       throw error;
     }
-
     return { status: 'queued', id: prepared.delivery.id, template: prepared.delivery.template };
   }
 
-  private async prepare(
-    project: ProjectConfig,
-    input: SendEmailInput,
-  ): Promise<
+  private async prepare(project: ProjectConfig, input: SendEmailInput): Promise<
     | { kind: 'prepared'; delivery: EmailDelivery; project: ProjectConfig; input: SendEmailInput; account: EmailAccount; message: PreparedEmailDelivery['message'] }
     | { kind: 'result'; result: SendEmailResult }
   > {
@@ -153,98 +144,50 @@ export class SendEmailUseCase {
     const account = await this.accountResolver.resolve(project.id, input.sender);
     const compiled = await compileTemplate(input.template, input.data);
     const delivery: EmailDelivery = {
-      id: deliveryId(),
-      projectId: project.id,
-      emailAccountId: account.id,
-      template: input.template,
-      to: Array.isArray(input.to) ? input.to : [input.to],
-      subject: compiled.subject,
-      status: 'processing',
-      createdAt: new Date().toISOString(),
-      ...(input.idempotencyKey
-        ? { idempotencyKey: input.idempotencyKey, payloadHash: payloadHash(input) }
-        : {}),
+      id: deliveryId(), projectId: project.id, emailAccountId: account.id, template: input.template,
+      to: Array.isArray(input.to) ? input.to : [input.to], subject: compiled.subject, status: 'processing', createdAt: new Date().toISOString(),
+      ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey, payloadHash: payloadHash(input) } : {}),
     };
     const reservation = await this.deliveryStore.reserve(delivery);
-
     if (reservation.kind === 'existing') {
       if (reservation.delivery.payloadHash !== delivery.payloadHash) throw new IdempotencyConflictError();
-      if (reservation.delivery.status === 'processing') {
-        return { kind: 'result', result: { status: 'processing', id: reservation.delivery.id, template: reservation.delivery.template } };
-      }
-      if (reservation.delivery.status === 'failed') {
-        throw new EmailDeliveryFailedError(reservation.delivery.id, reservation.delivery.errorCode);
-      }
-      return {
-        kind: 'result',
-        result: {
-          status: 'duplicate',
-          id: reservation.delivery.id,
-          ...(reservation.delivery.providerMessageId ? { messageId: reservation.delivery.providerMessageId } : {}),
-          template: reservation.delivery.template,
-        },
-      };
+      if (reservation.delivery.status === 'processing') return { kind: 'result', result: { status: 'processing', id: reservation.delivery.id, template: reservation.delivery.template } };
+      if (reservation.delivery.status === 'failed') throw new EmailDeliveryFailedError(reservation.delivery.id, reservation.delivery.errorCode);
+      return { kind: 'result', result: { status: 'duplicate', id: reservation.delivery.id, ...(reservation.delivery.providerMessageId ? { messageId: reservation.delivery.providerMessageId } : {}), template: reservation.delivery.template } };
     }
-
     return {
-      kind: 'prepared',
-      delivery,
-      project,
-      input,
-      account,
+      kind: 'prepared', delivery, project, input, account,
       message: {
-        to: input.to,
-        subject: compiled.subject,
-        html: compiled.html,
-        text: compiled.text,
-        ...(project.fromName ? { from: { name: project.fromName, address: account.email } } : { from: { address: account.email } }),
+        to: input.to, subject: compiled.subject, html: compiled.html, text: compiled.text,
+        from: { name: project.fromName, address: account.email },
         ...(project.replyTo ? { replyTo: project.replyTo } : {}),
       },
     };
   }
 
-  private async process(
-    delivery: EmailDelivery,
-    account: EmailAccount,
-    input: SendEmailInput,
-    message: PreparedEmailDelivery['message'],
-  ): Promise<SendEmailResult> {
+  private async process(delivery: EmailDelivery, account: EmailAccount, input: SendEmailInput, message: PreparedEmailDelivery['message']): Promise<SendEmailResult> {
     try {
       const result = await this.provider.send(account, message);
-      await this.deliveryStore.update(delivery.id, {
-        status: 'accepted',
-        acceptedAt: new Date().toISOString(),
-        providerMessageId: result.messageId,
-      });
+      await this.deliveryStore.update(delivery.id, { status: 'accepted', acceptedAt: new Date().toISOString(), providerMessageId: result.messageId });
       return { status: 'accepted', id: delivery.id, messageId: result.messageId, template: input.template };
     } catch (error) {
       const errorCode = error instanceof Error && 'code' in error && typeof error.code === 'string' ? error.code : undefined;
-      await this.deliveryStore.update(delivery.id, {
-        status: 'failed',
-        failedAt: new Date().toISOString(),
-        ...(errorCode ? { errorCode } : {}),
-      });
+      await this.deliveryStore.update(delivery.id, { status: 'failed', failedAt: new Date().toISOString(), ...(errorCode ? { errorCode } : {}) });
       throw new EmailDeliveryFailedError(delivery.id, errorCode);
     }
   }
 
-  async processJob(job: EmailJob): Promise<void> {
-    const account = await this.accountResolver.resolveById(job.emailAccountId, job.projectId);
+  async processJob(job: EmailJob, legacyProject?: ProjectConfig): Promise<void> {
+    const account = job.emailAccountId
+      ? await this.accountResolver.resolveById(job.emailAccountId, job.projectId)
+      : await this.accountResolver.resolve(job.projectId);
     await this.process(
-      {
-        id: job.deliveryId,
-        projectId: job.projectId,
-        emailAccountId: job.emailAccountId,
-        template: job.template,
-        to: Array.isArray(job.message.to) ? job.message.to : [job.message.to],
-        subject: job.message.subject,
-        status: 'processing',
-        createdAt: new Date().toISOString(),
-      },
+      { id: job.deliveryId, projectId: job.projectId, emailAccountId: account.id, template: job.template, to: Array.isArray(job.message.to) ? job.message.to : [job.message.to], subject: job.message.subject, status: 'processing', createdAt: new Date().toISOString() },
       account,
       { template: job.template, to: job.message.to, data: {} },
       job.message,
     );
+    void legacyProject;
   }
 
   async preview(project: ProjectConfig, input: z.infer<typeof previewEmailInputSchema>): Promise<{ subject: string; html: string; text: string }> {
