@@ -8,7 +8,9 @@ import {
 } from '../templates/template-registry.js';
 import { createHash, randomUUID } from 'node:crypto';
 import type { EmailDelivery, EmailDeliveryStore } from '../domain/email-delivery.js';
-import type { EmailJobQueue } from './email-job-queue.js';
+import type { EmailJob, EmailJobQueue } from './email-job-queue.js';
+import { EmailAccountResolver } from './email-account-resolver.js';
+import type { EmailAccount } from '../domain/smtp-provider.js';
 
 export const sendEmailInputSchema = z
   .object({
@@ -18,6 +20,7 @@ export const sendEmailInputSchema = z
       z.array(z.string().email()).min(1).max(20),
     ]),
     data: z.record(z.string(), z.unknown()).default({}),
+    sender: z.string().trim().min(1).max(120).optional(),
     idempotencyKey: z.string().trim().min(1).max(256).optional(),
   })
   .strict();
@@ -39,28 +42,10 @@ export class TemplateNotAllowedError extends Error {
 }
 
 export type SendEmailResult =
-  | {
-      status: 'accepted';
-      id: string;
-      messageId: string;
-      template: string;
-    }
-  | {
-      status: 'processing';
-      id: string;
-      template: string;
-    }
-  | {
-      status: 'queued';
-      id: string;
-      template: string;
-    }
-  | {
-      status: 'duplicate';
-      id: string;
-      messageId?: string;
-      template: string;
-    };
+  | { status: 'accepted'; id: string; messageId: string; template: string }
+  | { status: 'processing'; id: string; template: string }
+  | { status: 'queued'; id: string; template: string }
+  | { status: 'duplicate'; id: string; messageId?: string; template: string };
 
 export class IdempotencyConflictError extends Error {
   constructor() {
@@ -72,10 +57,7 @@ export class IdempotencyConflictError extends Error {
 export class EmailDeliveryFailedError extends Error {
   readonly retryable = false;
 
-  constructor(
-    readonly deliveryId: string,
-    readonly errorCode?: string,
-  ) {
+  constructor(readonly deliveryId: string, readonly errorCode?: string) {
     super('The email delivery failed');
     this.name = 'EmailDeliveryFailedError';
   }
@@ -84,12 +66,15 @@ export class EmailDeliveryFailedError extends Error {
 export interface PreparedEmailDelivery {
   project: ProjectConfig;
   input: SendEmailInput;
+  account: EmailAccount;
   delivery: EmailDelivery;
   message: {
     to: string | string[];
     subject: string;
     html: string;
     text: string;
+    from?: { name?: string; address: string };
+    replyTo?: string;
   };
 }
 
@@ -107,7 +92,7 @@ function canonicalize(value: unknown): unknown {
 
 function payloadHash(input: SendEmailInput): string {
   return createHash('sha256')
-    .update(JSON.stringify(canonicalize({ template: input.template, to: input.to, data: input.data })))
+    .update(JSON.stringify(canonicalize({ template: input.template, to: input.to, data: input.data, sender: input.sender })))
     .digest('hex');
 }
 
@@ -116,25 +101,23 @@ function deliveryId(): string {
 }
 
 export class SendEmailUseCase {
+  private readonly accountResolver: EmailAccountResolver;
+
   constructor(
     private readonly provider: EmailProvider,
     private readonly deliveryStore: EmailDeliveryStore,
-  ) {}
-
-  async execute(
-    project: ProjectConfig,
-    input: SendEmailInput,
-  ): Promise<SendEmailResult> {
-    const prepared = await this.prepare(project, input);
-    if (prepared.kind === 'result') return prepared.result;
-    return this.process(prepared.delivery, prepared.project, prepared.input, prepared.message);
+    accountStore: import('./email-account-store.js').EmailAccountStore,
+  ) {
+    this.accountResolver = new EmailAccountResolver(accountStore);
   }
 
-  async enqueue(
-    project: ProjectConfig,
-    input: SendEmailInput,
-    queue: EmailJobQueue,
-  ): Promise<SendEmailResult> {
+  async execute(project: ProjectConfig, input: SendEmailInput): Promise<SendEmailResult> {
+    const prepared = await this.prepare(project, input);
+    if (prepared.kind === 'result') return prepared.result;
+    return this.process(prepared.delivery, prepared.account, prepared.input, prepared.message);
+  }
+
+  async enqueue(project: ProjectConfig, input: SendEmailInput, queue: EmailJobQueue): Promise<SendEmailResult> {
     const prepared = await this.prepare(project, input);
     if (prepared.kind === 'result') return prepared.result;
 
@@ -143,6 +126,7 @@ export class SendEmailUseCase {
         id: prepared.delivery.id,
         deliveryId: prepared.delivery.id,
         projectId: prepared.project.id,
+        emailAccountId: prepared.account.id,
         template: prepared.delivery.template,
         message: prepared.message,
       });
@@ -155,26 +139,23 @@ export class SendEmailUseCase {
       throw error;
     }
 
-    return {
-      status: 'queued',
-      id: prepared.delivery.id,
-      template: prepared.delivery.template,
-    };
+    return { status: 'queued', id: prepared.delivery.id, template: prepared.delivery.template };
   }
 
   private async prepare(
     project: ProjectConfig,
     input: SendEmailInput,
   ): Promise<
-    | { kind: 'prepared'; delivery: EmailDelivery; project: ProjectConfig; input: SendEmailInput; message: PreparedEmailDelivery['message'] }
+    | { kind: 'prepared'; delivery: EmailDelivery; project: ProjectConfig; input: SendEmailInput; account: EmailAccount; message: PreparedEmailDelivery['message'] }
     | { kind: 'result'; result: SendEmailResult }
   > {
     this.assertTemplateAccess(project, input.template);
-
+    const account = await this.accountResolver.resolve(project.id, input.sender);
     const compiled = await compileTemplate(input.template, input.data);
     const delivery: EmailDelivery = {
       id: deliveryId(),
       projectId: project.id,
+      emailAccountId: account.id,
       template: input.template,
       to: Array.isArray(input.to) ? input.to : [input.to],
       subject: compiled.subject,
@@ -187,33 +168,19 @@ export class SendEmailUseCase {
     const reservation = await this.deliveryStore.reserve(delivery);
 
     if (reservation.kind === 'existing') {
-      if (reservation.delivery.payloadHash !== delivery.payloadHash) {
-        throw new IdempotencyConflictError();
-      }
+      if (reservation.delivery.payloadHash !== delivery.payloadHash) throw new IdempotencyConflictError();
       if (reservation.delivery.status === 'processing') {
-        return {
-          kind: 'result',
-          result: {
-            status: 'processing',
-            id: reservation.delivery.id,
-            template: reservation.delivery.template,
-          },
-        };
+        return { kind: 'result', result: { status: 'processing', id: reservation.delivery.id, template: reservation.delivery.template } };
       }
       if (reservation.delivery.status === 'failed') {
-        throw new EmailDeliveryFailedError(
-          reservation.delivery.id,
-          reservation.delivery.errorCode,
-        );
+        throw new EmailDeliveryFailedError(reservation.delivery.id, reservation.delivery.errorCode);
       }
       return {
         kind: 'result',
         result: {
           status: 'duplicate',
           id: reservation.delivery.id,
-          ...(reservation.delivery.providerMessageId
-            ? { messageId: reservation.delivery.providerMessageId }
-            : {}),
+          ...(reservation.delivery.providerMessageId ? { messageId: reservation.delivery.providerMessageId } : {}),
           template: reservation.delivery.template,
         },
       };
@@ -224,36 +191,32 @@ export class SendEmailUseCase {
       delivery,
       project,
       input,
+      account,
       message: {
         to: input.to,
         subject: compiled.subject,
         html: compiled.html,
         text: compiled.text,
+        ...(project.fromName ? { from: { name: project.fromName, address: account.email } } : { from: { address: account.email } }),
+        ...(project.replyTo ? { replyTo: project.replyTo } : {}),
       },
     };
   }
 
   private async process(
     delivery: EmailDelivery,
-    project: ProjectConfig,
+    account: EmailAccount,
     input: SendEmailInput,
     message: PreparedEmailDelivery['message'],
   ): Promise<SendEmailResult> {
     try {
-      const result = await this.provider.send(project, message);
-
+      const result = await this.provider.send(account, message);
       await this.deliveryStore.update(delivery.id, {
         status: 'accepted',
         acceptedAt: new Date().toISOString(),
         providerMessageId: result.messageId,
       });
-
-      return {
-        status: 'accepted',
-        id: delivery.id,
-        messageId: result.messageId,
-        template: input.template,
-      };
+      return { status: 'accepted', id: delivery.id, messageId: result.messageId, template: input.template };
     } catch (error) {
       const errorCode = error instanceof Error && 'code' in error && typeof error.code === 'string' ? error.code : undefined;
       await this.deliveryStore.update(delivery.id, {
@@ -261,56 +224,38 @@ export class SendEmailUseCase {
         failedAt: new Date().toISOString(),
         ...(errorCode ? { errorCode } : {}),
       });
-
-      // Keep the idempotency reservation after a provider failure. A retry
-      // cannot know whether the provider accepted the message before timing
-      // out, so automatically sending again could create a duplicate.
       throw new EmailDeliveryFailedError(delivery.id, errorCode);
     }
   }
 
-  async processJob(
-    job: import('./email-job-queue.js').EmailJob,
-    project: ProjectConfig,
-  ): Promise<void> {
+  async processJob(job: EmailJob): Promise<void> {
+    const account = await this.accountResolver.resolveById(job.emailAccountId, job.projectId);
     await this.process(
       {
         id: job.deliveryId,
         projectId: job.projectId,
+        emailAccountId: job.emailAccountId,
         template: job.template,
         to: Array.isArray(job.message.to) ? job.message.to : [job.message.to],
         subject: job.message.subject,
         status: 'processing',
         createdAt: new Date().toISOString(),
       },
-      project,
-      {
-        template: job.template,
-        to: job.message.to,
-        data: {},
-      },
+      account,
+      { template: job.template, to: job.message.to, data: {} },
       job.message,
     );
   }
 
-  async preview(
-    project: ProjectConfig,
-    input: z.infer<typeof previewEmailInputSchema>,
-  ): Promise<{ subject: string; html: string; text: string }> {
+  async preview(project: ProjectConfig, input: z.infer<typeof previewEmailInputSchema>): Promise<{ subject: string; html: string; text: string }> {
     this.assertTemplateAccess(project, input.template);
     return compileTemplate(input.template, input.data);
   }
 
   private assertTemplateAccess(project: ProjectConfig, template: string): void {
-    if (!hasTemplate(template)) {
-      throw new UnknownTemplateError(template);
-    }
-
+    if (!hasTemplate(template)) throw new UnknownTemplateError(template);
     const allowsAll = project.allowedTemplates.includes('*');
     const isAllowed = project.allowedTemplates.includes(template);
-
-    if (!allowsAll && !isAllowed) {
-      throw new TemplateNotAllowedError(template, project.id);
-    }
+    if (!allowsAll && !isAllowed) throw new TemplateNotAllowedError(template, project.id);
   }
 }
