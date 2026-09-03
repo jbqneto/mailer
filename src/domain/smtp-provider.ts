@@ -1,5 +1,6 @@
 export enum SmtpProvider {
   PURELY_MAIL = 'PURELY_MAIL',
+  MAILPIT = 'MAILPIT',
 }
 
 export interface SmtpCredentials {
