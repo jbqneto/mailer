@@ -15,6 +15,7 @@ describe('InMemoryEmailJobQueue', () => {
       id: 'job-1',
       deliveryId: 'delivery-1',
       projectId: 'project-1',
+      emailAccountId: 'acc-1',
       template: 'welcome-user',
       message: { to: 'user@example.com', subject: 'Welcome', html: '<p>Welcome</p>', text: 'Welcome' },
     });
@@ -43,7 +44,7 @@ describe('InMemoryEmailJobQueue', () => {
     });
 
     const baseJob = {
-      deliveryId: 'delivery-1', projectId: 'project-1', template: 'welcome-user',
+      deliveryId: 'delivery-1', projectId: 'project-1', template: 'welcome-user', emailAccountId: 'acc-1',
       message: { to: 'user@example.com', subject: 'Welcome', html: '<p>Welcome</p>', text: 'Welcome' },
     };
     await queue.enqueue({ ...baseJob, id: 'job-failed' });
@@ -72,6 +73,7 @@ describe('InMemoryEmailJobQueue', () => {
       id: 'job-retry',
       deliveryId: 'delivery-retry',
       projectId: 'project-1',
+      emailAccountId: 'acc-1',
       template: 'welcome-user',
       message: { to: 'user@example.com', subject: 'Welcome', html: '<p>Welcome</p>', text: 'Welcome' },
     });

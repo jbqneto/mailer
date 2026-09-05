@@ -4,6 +4,7 @@ import type {
   EmailProvider,
 } from '../domain/email-provider.js';
 import type { ProjectConfig } from '../domain/project.js';
+import { SmtpProvider, type EmailAccount } from '../domain/smtp-provider.js';
 import { InMemoryEmailDeliveryStore } from '../infrastructure/storage/in-memory-email-delivery-store.js';
 import {
   SendEmailUseCase,
@@ -16,7 +17,7 @@ class FakeEmailProvider implements EmailProvider {
   readonly sent: EmailMessage[] = [];
 
   async send(
-    _project: ProjectConfig,
+    _account: EmailAccount,
     message: EmailMessage,
   ): Promise<{ messageId: string }> {
     this.sent.push(message);
@@ -24,21 +25,21 @@ class FakeEmailProvider implements EmailProvider {
   }
 }
 
-const project: ProjectConfig = {
+const project = {
   id: 'test-project',
   apiKey: 'x'.repeat(32),
   fromEmail: 'noreply@example.com',
   fromName: 'Test Project',
-  smtp: {
-    host: 'smtp.example.com',
-    port: 587,
-    secure: false,
-    auth: {
-      user: 'noreply@example.com',
-      password: 'secret',
-    },
-  },
-  allowedTemplates: ['*'],
+  allowedTemplates: ['*'] as const,
+};
+
+const testAccount: EmailAccount = {
+  id: '00000000-0000-4000-8000-000000000001',
+  name: 'test-default',
+  email: 'noreply@example.com',
+  provider: SmtpProvider.PURELY_MAIL,
+  credentials: { username: 'test', password: 'test' },
+  active: true,
 };
 
 describe('SendEmailUseCase', () => {
@@ -141,8 +142,8 @@ describe('SendEmailUseCase', () => {
       releaseProvider = resolve;
     });
     class SlowProvider extends FakeEmailProvider {
-      override async send(projectConfig: ProjectConfig, message: EmailMessage) {
-        const sending = super.send(projectConfig, message);
+      override async send(account: EmailAccount, message: EmailMessage) {
+        const sending = super.send(account, message);
         markProviderStarted();
         await release;
         return sending;
@@ -196,7 +197,7 @@ describe('SendEmailUseCase', () => {
     const provider = new FakeEmailProvider();
     const useCase = new SendEmailUseCase(provider, new InMemoryEmailDeliveryStore());
     const queue = new InMemoryEmailJobQueue({
-      handler: (job) => useCase.processJob(job, project),
+      handler: (job) => useCase.processJob(job),
     });
 
     const result = await useCase.enqueue(project, {

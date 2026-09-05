@@ -52,6 +52,18 @@ export class GatewayMetrics {
     this.histograms.set(metricKey, { name, labels: { ...labels }, count: 1, sum: value });
   }
 
+  snapshot(): { counters: Record<string, number>; histograms: Record<string, { count: number; sum: number }> } {
+    const counters: Record<string, number> = {};
+    for (const [key, metric] of this.counters) {
+      counters[key] = metric.value;
+    }
+    const histograms: Record<string, { count: number; sum: number }> = {};
+    for (const [key, metric] of this.histograms) {
+      histograms[key] = { count: metric.count, sum: metric.sum };
+    }
+    return { counters, histograms };
+  }
+
   renderPrometheus(): string {
     const lines: string[] = [];
     const counterNames = new Set([...this.counters.values()].map((metric) => metric.name));

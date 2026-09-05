@@ -88,6 +88,38 @@ class TestEmailAccountStore implements EmailAccountStore {
   async findDefaultForProject(_projectId: string): Promise<EmailAccount | null> {
     return this.account;
   }
+
+  async list(): Promise<readonly EmailAccount[]> {
+    return [this.account];
+  }
+
+  async listWithProjectLinks(): Promise<readonly { account: EmailAccount; projectIds: readonly string[]; isDefaultFor: readonly string[] }[]> {
+    return [{ account: this.account, projectIds: [], isDefaultFor: [] }];
+  }
+
+  async create(): Promise<EmailAccount> {
+    throw new Error('Not implemented in test store');
+  }
+
+  async update(): Promise<EmailAccount> {
+    throw new Error('Not implemented in test store');
+  }
+
+  async delete(): Promise<void> {
+    throw new Error('Not implemented in test store');
+  }
+
+  async linkToProject(): Promise<void> {
+    throw new Error('Not implemented in test store');
+  }
+
+  async unlinkFromProject(): Promise<void> {
+    throw new Error('Not implemented in test store');
+  }
+
+  async setDefaultForProject(): Promise<void> {
+    throw new Error('Not implemented in test store');
+  }
 }
 
 function canonicalize(value: unknown): unknown {
@@ -177,17 +209,17 @@ export class SendEmailUseCase {
     }
   }
 
-  async processJob(job: EmailJob, legacyProject?: ProjectConfig): Promise<void> {
-    const account = job.emailAccountId
-      ? await this.accountResolver.resolveById(job.emailAccountId, job.projectId)
-      : await this.accountResolver.resolve(job.projectId);
+  async processJob(job: EmailJob): Promise<void> {
+    if (!job.emailAccountId) {
+      throw new Error('Job is missing emailAccountId; legacy jobs without an account ID are not supported');
+    }
+    const account = await this.accountResolver.resolveById(job.emailAccountId, job.projectId);
     await this.process(
       { id: job.deliveryId, projectId: job.projectId, emailAccountId: account.id, template: job.template, to: Array.isArray(job.message.to) ? job.message.to : [job.message.to], subject: job.message.subject, status: 'processing', createdAt: new Date().toISOString() },
       account,
       { template: job.template, to: job.message.to, data: {} },
       job.message,
     );
-    void legacyProject;
   }
 
   async preview(project: ProjectConfig, input: z.infer<typeof previewEmailInputSchema>): Promise<{ subject: string; html: string; text: string }> {

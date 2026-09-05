@@ -5,6 +5,7 @@ import { InMemoryEmailDeliveryStore } from './in-memory-email-delivery-store.js'
 const delivery: EmailDelivery = {
   id: 'email_test_1',
   projectId: 'project-a',
+  emailAccountId: 'acc-1',
   template: 'welcome-user',
   to: ['user@example.com'],
   subject: 'Welcome',
