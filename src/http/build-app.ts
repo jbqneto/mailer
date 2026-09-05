@@ -2,20 +2,13 @@ import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest }
 import { ZodError } from 'zod';
 import type { EmailProvider } from '../domain/email-provider.js';
 import type { ProjectConfig } from '../domain/project.js';
-import { SmtpProvider, type EmailAccount } from '../domain/smtp-provider.js';
-import {
-  SendEmailUseCase,
-  EmailDeliveryFailedError,
-  IdempotencyConflictError,
-  previewEmailInputSchema,
-  sendEmailInputSchema,
-  TemplateNotAllowedError,
-} from '../application/send-email.js';
-import { EmailAccountInactiveError, EmailAccountNotFoundError } from '../application/email-account-resolver.js';
-import type { EmailAccountStore } from '../application/email-account-store.js';
+import { SendEmailUseCase } from '../application/send-email.js';
 import type { EmailDeliveryStore } from '../domain/email-delivery.js';
 import { InMemoryEmailDeliveryStore } from '../infrastructure/storage/in-memory-email-delivery-store.js';
+import type { EmailAccountStore } from '../application/email-account-store.js';
 import { InMemoryEmailAccountStore } from '../infrastructure/storage/in-memory-email-account-store.js';
+import { SmtpProvider, type EmailAccount } from '../domain/smtp-provider.js';
+import { AdminAuth, AdminLoginRateLimiter } from '../security/admin-auth.js';
 import { resolveProjectFromAuthorization } from '../security/api-key-auth.js';
 import { UnknownTemplateError } from '../templates/template-registry.js';
 import { maskRecipients } from './mask-email.js';
@@ -30,6 +23,8 @@ import type { RateLimiter } from '../application/rate-limiter.js';
 import { InMemoryRateLimiter } from '../infrastructure/rate-limit/in-memory-rate-limiter.js';
 import { GatewayMetrics } from '../observability/metrics.js';
 import type { EmailJobQueue } from '../application/email-job-queue.js';
+import { registerRestRoutes } from './routes/rest-routes.js';
+import { registerUiRoutes } from './routes/ui-routes.js';
 import type { CreateEmailAccountInput, UpdateEmailAccountInput } from '../application/email-account-store.js';
 
 interface BuildAppDependencies {
@@ -49,14 +44,7 @@ interface BuildAppDependencies {
 }
 
 function createTestAccountStore(projects: readonly ProjectConfig[]): EmailAccountStore {
-  const accounts: EmailAccount[] = projects.map((project) => ({
-    id: `test-account-${project.id}`,
-    name: `${project.id}-default`,
-    email: project.fromEmail,
-    provider: SmtpProvider.PURELY_MAIL,
-    credentials: { username: 'test', password: 'test' },
-    active: true,
-  }));
+  const accounts: EmailAccount[] = projects.map((project) => ({ id: `test-account-${project.id}`, name: `${project.id}-default`, email: project.fromEmail, provider: SmtpProvider.PURELY_MAIL, credentials: { username: 'test', password: 'test' }, active: true }));
   const defaults = new Map(projects.map((project) => [project.id, `test-account-${project.id}`]));
   const projectAccounts = new Map(projects.map((project) => [project.id, [`test-account-${project.id}`]] as const));
   return new InMemoryEmailAccountStore(accounts, defaults, projectAccounts);
@@ -80,6 +68,10 @@ export function buildApp({
   const app = Fastify({ logger, bodyLimit, trustProxy });
   const sendEmail = new SendEmailUseCase(emailProvider, deliveryStore, emailAccountStore);
   const requestStartedAt = new WeakMap<object, bigint>();
+  
+  registerRestRoutes(app, { projects, sendEmail, adminAuth, adminLoginRateLimiter, secureAdminCookie, deliveryStore, rateLimiter, metrics, emailQueue });
+  registerUiRoutes(app, { adminAuth });
+  
 
   app.addHook('onRequest', async (request, reply) => {
     requestStartedAt.set(request, process.hrtime.bigint());
@@ -92,6 +84,7 @@ export function buildApp({
     metrics.increment('email_gateway_http_requests_total', { method: request.method, route: request.routeOptions.url ?? 'unknown', status_code: reply.statusCode.toString() });
     metrics.observe('email_gateway_http_request_duration_ms', durationMs, { method: request.method, route: request.routeOptions.url ?? 'unknown' });
   });
+
 
   function enforceRateLimit(projectId: string, reply: FastifyReply): boolean {
     const decision = rateLimiter.consume(projectId);
