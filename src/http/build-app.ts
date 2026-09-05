@@ -1,4 +1,4 @@
-import Fastify, { type FastifyInstance, type FastifyReply } from 'fastify';
+import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import { ZodError } from 'zod';
 import type { EmailProvider } from '../domain/email-provider.js';
 import type { ProjectConfig } from '../domain/project.js';
@@ -22,6 +22,7 @@ import { maskRecipients } from './mask-email.js';
 import { previewPage } from './preview-page.js';
 import { listTemplatePreviews } from '../templates/template-preview-data.js';
 import { adminLoginPage } from './admin-login-page.js';
+import { adminDashboardPage } from './admin-dashboard-page.js';
 import { AdminAuth, AdminLoginRateLimiter, adminSessionCookie, clearAdminSessionCookie } from '../security/admin-auth.js';
 import { z } from 'zod';
 import { safeErrorDetails } from './safe-error.js';
@@ -29,6 +30,7 @@ import type { RateLimiter } from '../application/rate-limiter.js';
 import { InMemoryRateLimiter } from '../infrastructure/rate-limit/in-memory-rate-limiter.js';
 import { GatewayMetrics } from '../observability/metrics.js';
 import type { EmailJobQueue } from '../application/email-job-queue.js';
+import type { CreateEmailAccountInput, UpdateEmailAccountInput } from '../application/email-account-store.js';
 
 interface BuildAppDependencies {
   projects: ProjectConfig[];
@@ -122,12 +124,147 @@ export function buildApp({
 
   app.post('/admin/logout', async (request, reply) => reply.code(204).header('Set-Cookie', clearAdminSessionCookie).send());
 
+  app.get('/admin', async (request, reply) => {
+    if (!adminAuth.isAuthenticated(request.headers.cookie)) return reply.code(200).header('Cache-Control', 'no-store').type('text/html; charset=utf-8').send(adminLoginPage());
+    const accountsWithLinks = await emailAccountStore.listWithProjectLinks();
+    return reply.header('Cache-Control', 'no-store').type('text/html; charset=utf-8').send(adminDashboardPage({
+      projects,
+      emailAccounts: accountsWithLinks.map((a) => a.account),
+      accountLinks: accountsWithLinks,
+      metrics,
+      emailQueue,
+    }));
+  });
+
   app.get('/admin/emails', async (request, reply) => {
     if (!adminAuth.isAuthenticated(request.headers.cookie)) return reply.code(401).send({ error: 'admin_authentication_required' });
     const query = z.object({ limit: z.coerce.number().int().min(1).max(100).default(50) }).safeParse(request.query);
     if (!query.success) return reply.code(400).send({ error: 'invalid_request' });
     const deliveries = await deliveryStore.list({ limit: query.data.limit });
     return { data: deliveries.map((delivery) => ({ ...delivery, to: maskRecipients(delivery.to), idempotencyKey: undefined, payloadHash: undefined })) };
+  });
+
+  const createEmailAccountSchema = z.object({
+    name: z.string().trim().min(1).max(120),
+    email: z.string().email(),
+    provider: z.nativeEnum(SmtpProvider),
+    credentials: z.object({ username: z.string().min(1), password: z.string().min(1) }),
+    active: z.boolean().optional(),
+  }).strict();
+
+  const updateEmailAccountSchema = z.object({
+    name: z.string().trim().min(1).max(120).optional(),
+    email: z.string().email().optional(),
+    provider: z.nativeEnum(SmtpProvider).optional(),
+    credentials: z.object({ username: z.string().min(1), password: z.string().min(1) }).optional(),
+    active: z.boolean().optional(),
+  }).strict();
+
+  const linkProjectSchema = z.object({
+    projectId: z.string().min(1).max(100),
+    isDefault: z.boolean().optional(),
+  }).strict();
+
+  function requireAdmin(request: FastifyRequest, reply: FastifyReply): boolean {
+    const cookie = request.headers.cookie;
+    if (!adminAuth.isAuthenticated(cookie)) {
+      reply.code(401).send({ error: 'admin_authentication_required' });
+      return false;
+    }
+    return true;
+  }
+
+  app.get('/admin/email-accounts', async (request, reply) => {
+    if (!requireAdmin(request, reply)) return;
+    const accounts = await emailAccountStore.listWithProjectLinks();
+    return { data: accounts };
+  });
+
+  app.post('/admin/email-accounts', async (request, reply) => {
+    if (!requireAdmin(request, reply)) return;
+    const parsed = createEmailAccountSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: 'invalid_request', issues: parsed.error.issues.map((issue) => ({ path: issue.path.join('.'), message: issue.message })) });
+    try {
+      const account = await emailAccountStore.create(parsed.data);
+      return reply.code(201).send(account);
+    } catch (error) {
+      request.log.error({ error: safeErrorDetails(error) }, 'failed to create email account');
+      return reply.code(500).send({ error: 'creation_failed', message: 'Could not create email account' });
+    }
+  });
+
+  app.patch('/admin/email-accounts/:id', async (request, reply) => {
+    if (!requireAdmin(request, reply)) return;
+    const params = z.object({ id: z.string().uuid() }).safeParse(request.params);
+    if (!params.success) return reply.code(400).send({ error: 'invalid_request' });
+    const parsed = updateEmailAccountSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: 'invalid_request', issues: parsed.error.issues.map((issue) => ({ path: issue.path.join('.'), message: issue.message })) });
+    try {
+      const account = await emailAccountStore.update(params.data.id, parsed.data);
+      return account;
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('not found')) return reply.code(404).send({ error: 'not_found', message: error.message });
+      request.log.error({ error: safeErrorDetails(error) }, 'failed to update email account');
+      return reply.code(500).send({ error: 'update_failed', message: 'Could not update email account' });
+    }
+  });
+
+  app.delete('/admin/email-accounts/:id', async (request, reply) => {
+    if (!requireAdmin(request, reply)) return;
+    const params = z.object({ id: z.string().uuid() }).safeParse(request.params);
+    if (!params.success) return reply.code(400).send({ error: 'invalid_request' });
+    try {
+      await emailAccountStore.delete(params.data.id);
+      return reply.code(204).send();
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('not found')) return reply.code(404).send({ error: 'not_found', message: error.message });
+      request.log.error({ error: safeErrorDetails(error) }, 'failed to delete email account');
+      return reply.code(500).send({ error: 'deletion_failed', message: 'Could not delete email account' });
+    }
+  });
+
+  app.post('/admin/email-accounts/:id/projects', async (request, reply) => {
+    if (!requireAdmin(request, reply)) return;
+    const params = z.object({ id: z.string().uuid() }).safeParse(request.params);
+    if (!params.success) return reply.code(400).send({ error: 'invalid_request' });
+    const parsed = linkProjectSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: 'invalid_request', issues: parsed.error.issues.map((issue) => ({ path: issue.path.join('.'), message: issue.message })) });
+    const project = projects.find((p) => p.id === parsed.data.projectId);
+    if (!project) return reply.code(404).send({ error: 'not_found', message: 'Project not found' });
+    try {
+      await emailAccountStore.linkToProject(parsed.data.projectId, params.data.id, parsed.data.isDefault ?? false);
+      return reply.code(204).send();
+    } catch (error) {
+      request.log.error({ error: safeErrorDetails(error) }, 'failed to link email account to project');
+      return reply.code(500).send({ error: 'link_failed', message: 'Could not link email account to project' });
+    }
+  });
+
+  app.delete('/admin/email-accounts/:id/projects/:projectId', async (request, reply) => {
+    if (!requireAdmin(request, reply)) return;
+    const params = z.object({ id: z.string().uuid(), projectId: z.string().min(1).max(100) }).safeParse(request.params);
+    if (!params.success) return reply.code(400).send({ error: 'invalid_request' });
+    try {
+      await emailAccountStore.unlinkFromProject(params.data.projectId, params.data.id);
+      return reply.code(204).send();
+    } catch (error) {
+      request.log.error({ error: safeErrorDetails(error) }, 'failed to unlink email account from project');
+      return reply.code(500).send({ error: 'unlink_failed', message: 'Could not unlink email account from project' });
+    }
+  });
+
+  app.patch('/admin/email-accounts/:id/projects/:projectId', async (request, reply) => {
+    if (!requireAdmin(request, reply)) return;
+    const params = z.object({ id: z.string().uuid(), projectId: z.string().min(1).max(100) }).safeParse(request.params);
+    if (!params.success) return reply.code(400).send({ error: 'invalid_request' });
+    try {
+      await emailAccountStore.setDefaultForProject(params.data.projectId, params.data.id);
+      return reply.code(204).send();
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('not linked')) return reply.code(404).send({ error: 'not_found', message: error.message });
+      request.log.error({ error: safeErrorDetails(error) }, 'failed to set default email account');
+      return reply.code(500).send({ error: 'update_failed', message: 'Could not set default email account' });
+    }
   });
 
   app.get('/v1/projects/me', async (request, reply) => {

@@ -4,7 +4,7 @@ import type { EmailDelivery, EmailDeliveryFilter, EmailDeliveryReservation, Emai
 interface DeliveryRow {
   id: string;
   project_id: string;
-  email_account_id: string | null;
+  email_account_id: string;
   template: string;
   recipients: unknown;
   subject: string;
@@ -23,7 +23,7 @@ function fromRow(row: DeliveryRow): EmailDelivery {
   return {
     id: row.id,
     projectId: row.project_id,
-    ...(row.email_account_id ? { emailAccountId: row.email_account_id } : {}),
+    emailAccountId: row.email_account_id,
     template: row.template,
     to: row.recipients,
     subject: row.subject,
@@ -42,7 +42,7 @@ function toRow(delivery: EmailDelivery): DeliveryRow {
   return {
     id: delivery.id,
     project_id: delivery.projectId,
-    email_account_id: delivery.emailAccountId ?? null,
+    email_account_id: delivery.emailAccountId,
     template: delivery.template,
     recipients: delivery.to,
     subject: delivery.subject,
