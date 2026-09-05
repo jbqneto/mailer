@@ -92,6 +92,34 @@ class TestEmailAccountStore implements EmailAccountStore {
   async list(): Promise<readonly EmailAccount[]> {
     return [this.account];
   }
+
+  async listWithProjectLinks(): Promise<readonly { account: EmailAccount; projectIds: readonly string[]; isDefaultFor: readonly string[] }[]> {
+    return [{ account: this.account, projectIds: [], isDefaultFor: [] }];
+  }
+
+  async create(): Promise<EmailAccount> {
+    throw new Error('Not implemented in test store');
+  }
+
+  async update(): Promise<EmailAccount> {
+    throw new Error('Not implemented in test store');
+  }
+
+  async delete(): Promise<void> {
+    throw new Error('Not implemented in test store');
+  }
+
+  async linkToProject(): Promise<void> {
+    throw new Error('Not implemented in test store');
+  }
+
+  async unlinkFromProject(): Promise<void> {
+    throw new Error('Not implemented in test store');
+  }
+
+  async setDefaultForProject(): Promise<void> {
+    throw new Error('Not implemented in test store');
+  }
 }
 
 function canonicalize(value: unknown): unknown {
