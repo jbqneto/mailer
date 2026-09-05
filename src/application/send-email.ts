@@ -88,6 +88,10 @@ class TestEmailAccountStore implements EmailAccountStore {
   async findDefaultForProject(_projectId: string): Promise<EmailAccount | null> {
     return this.account;
   }
+
+  async list(): Promise<readonly EmailAccount[]> {
+    return [this.account];
+  }
 }
 
 function canonicalize(value: unknown): unknown {

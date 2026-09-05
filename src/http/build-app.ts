@@ -22,6 +22,7 @@ import { maskRecipients } from './mask-email.js';
 import { previewPage } from './preview-page.js';
 import { listTemplatePreviews } from '../templates/template-preview-data.js';
 import { adminLoginPage } from './admin-login-page.js';
+import { adminDashboardPage } from './admin-dashboard-page.js';
 import { AdminAuth, AdminLoginRateLimiter, adminSessionCookie, clearAdminSessionCookie } from '../security/admin-auth.js';
 import { z } from 'zod';
 import { safeErrorDetails } from './safe-error.js';
@@ -121,6 +122,16 @@ export function buildApp({
   });
 
   app.post('/admin/logout', async (request, reply) => reply.code(204).header('Set-Cookie', clearAdminSessionCookie).send());
+
+  app.get('/admin', async (request, reply) => {
+    if (!adminAuth.isAuthenticated(request.headers.cookie)) return reply.code(200).header('Cache-Control', 'no-store').type('text/html; charset=utf-8').send(adminLoginPage());
+    return reply.header('Cache-Control', 'no-store').type('text/html; charset=utf-8').send(adminDashboardPage({
+      projects,
+      emailAccounts: await emailAccountStore.list(),
+      metrics,
+      emailQueue,
+    }));
+  });
 
   app.get('/admin/emails', async (request, reply) => {
     if (!adminAuth.isAuthenticated(request.headers.cookie)) return reply.code(401).send({ error: 'admin_authentication_required' });

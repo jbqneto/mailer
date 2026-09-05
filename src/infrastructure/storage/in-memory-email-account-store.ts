@@ -24,4 +24,8 @@ export class InMemoryEmailAccountStore implements EmailAccountStore {
     if (!id) return null;
     return this.findById(id);
   }
+
+  async list(): Promise<readonly EmailAccount[]> {
+    return this.accounts;
+  }
 }

@@ -91,6 +91,16 @@ export class SupabaseEmailAccountStore implements EmailAccountStore {
     return this.toDomain(parseRow(data.email_accounts));
   }
 
+  async list(): Promise<readonly EmailAccount[]> {
+    const { data, error } = await this.client
+      .schema(this.schema)
+      .from('email_accounts')
+      .select('id, name, email, provider, encrypted_credentials, active');
+
+    if (error) throw new Error(`Failed to list email accounts: ${error.message}`);
+    return (data ?? []).map((row) => this.toDomain(parseRow(row)));
+  }
+
   private toDomain(row: EmailAccountRow): EmailAccount {
     let decrypted: unknown;
     try {

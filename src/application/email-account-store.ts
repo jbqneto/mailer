@@ -4,4 +4,5 @@ export interface EmailAccountStore {
   findById(id: string): Promise<EmailAccount | null>;
   findByNameForProject(projectId: string, name: string): Promise<EmailAccount | null>;
   findDefaultForProject(projectId: string): Promise<EmailAccount | null>;
+  list(): Promise<readonly EmailAccount[]>;
 }
