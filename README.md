@@ -188,17 +188,12 @@ The prefix maps to environment variables:
 
 ```env
 BLOOM_APP_API_KEY=at-least-32-random-characters
+# Optional display override; omit to use the project's default email account.
 BLOOM_APP_FROM_EMAIL=bloom@purelymail.com
 BLOOM_APP_FROM_NAME=Bloom
-BLOOM_APP_SMTP_HOST=smtp.purelymail.com
-BLOOM_APP_SMTP_PORT=465
-BLOOM_APP_SMTP_SECURE=true
-BLOOM_APP_SMTP_AUTH=true
-BLOOM_APP_SMTP_USER=bloom@purelymail.com
-BLOOM_APP_SMTP_PASSWORD=app-password
 ```
 
-API keys must contain at least 32 characters. The application fails during startup when required configuration is missing or invalid, and rejects duplicate project IDs or API keys.
+API keys must contain at least 32 characters. The application fails during startup when required configuration is missing or invalid, and rejects duplicate project IDs or API keys. SMTP credentials live in the `email_gateway.email_accounts` table (admin UI), not in environment variables: the envelope sender always comes from the project's default email account.
 
 ## API rate limiting
 

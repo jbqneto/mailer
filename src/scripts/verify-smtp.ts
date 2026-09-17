@@ -31,7 +31,7 @@ if (runtimeEnv.NODE_ENV === 'production') {
   const accounts: EmailAccount[] = projects.map((project) => ({
     id: `dev-account-${project.id}`,
     name: `${project.id}-default`,
-    email: project.fromEmail,
+    email: project.fromEmail ?? `${project.id}@local.test`,
     provider: SmtpProvider.MAILPIT,
     credentials: { username: '', password: '' },
     active: true,

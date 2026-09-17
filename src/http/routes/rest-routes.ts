@@ -49,7 +49,7 @@ export function registerRestRoutes(app: FastifyInstance, dependencies: RestRoute
     if (!adminAuth.isAuthenticated(request.headers.cookie)) return reply.code(401).send({ error: 'admin_authentication_required', message: 'Administrator login is required' });
     const project = resolveProjectFromAuthorization(request.headers.authorization, projects);
     if (!project) return reply.code(401).send({ error: 'unauthorized', message: 'Missing or invalid project API key' });
-    return { projectId: project.id, fromEmail: project.fromEmail, allowedTemplates: project.allowedTemplates };
+    return { projectId: project.id, fromEmail: project.fromEmail ?? null, allowedTemplates: project.allowedTemplates };
   });
   app.post('/v1/emails/preview', async (request, reply) => {
     if (!adminAuth.isAuthenticated(request.headers.cookie)) return reply.code(401).send({ error: 'admin_authentication_required', message: 'Administrator login is required for template preview' });

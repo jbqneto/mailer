@@ -25,15 +25,20 @@ function optional(prefix: string, suffix: string): string | undefined {
 function loadProject(definition: ProjectDefinition): ProjectConfig {
   const prefix = definition.envPrefix;
   const apiKey = apiKeySchema.parse(required(prefix, 'API_KEY'));
-  const fromEmail = emailSchema.parse(required(prefix, 'FROM_EMAIL'));
-  const fromName = optional(prefix, 'FROM_NAME') ?? fromEmail;
+  // FROM_EMAIL is optional: the real envelope sender comes from the project's
+  // default email account in the EmailAccountStore (admin UI / database).
+  // When set, it acts as a display override (admin dashboard, preview,
+  // /v1/projects/me) and as the address for synthetic dev/test accounts.
+  const fromEmailRaw = optional(prefix, 'FROM_EMAIL');
+  const fromEmail = fromEmailRaw ? emailSchema.parse(fromEmailRaw) : undefined;
+  const fromName = optional(prefix, 'FROM_NAME') ?? fromEmail ?? definition.id;
   const replyToRaw = optional(prefix, 'REPLY_TO');
   const replyTo = replyToRaw ? emailSchema.parse(replyToRaw) : undefined;
 
   return {
     id: definition.id,
     apiKey,
-    fromEmail,
+    ...(fromEmail ? { fromEmail } : {}),
     fromName,
     ...(replyTo ? { replyTo } : {}),
     allowedTemplates: definition.allowedTemplates,

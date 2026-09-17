@@ -2,13 +2,21 @@ import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest }
 import { ZodError } from 'zod';
 import type { EmailProvider } from '../domain/email-provider.js';
 import type { ProjectConfig } from '../domain/project.js';
-import { SendEmailUseCase } from '../application/send-email.js';
+import {
+  SendEmailUseCase,
+  EmailDeliveryFailedError,
+  IdempotencyConflictError,
+  previewEmailInputSchema,
+  sendEmailInputSchema,
+  TemplateNotAllowedError,
+} from '../application/send-email.js';
+import { EmailAccountInactiveError, EmailAccountNotFoundError } from '../application/email-account-resolver.js';
 import type { EmailDeliveryStore } from '../domain/email-delivery.js';
 import { InMemoryEmailDeliveryStore } from '../infrastructure/storage/in-memory-email-delivery-store.js';
 import type { EmailAccountStore } from '../application/email-account-store.js';
 import { InMemoryEmailAccountStore } from '../infrastructure/storage/in-memory-email-account-store.js';
 import { SmtpProvider, type EmailAccount } from '../domain/smtp-provider.js';
-import { AdminAuth, AdminLoginRateLimiter } from '../security/admin-auth.js';
+import { AdminAuth, AdminLoginRateLimiter, adminSessionCookie, clearAdminSessionCookie } from '../security/admin-auth.js';
 import { resolveProjectFromAuthorization } from '../security/api-key-auth.js';
 import { UnknownTemplateError } from '../templates/template-registry.js';
 import { maskRecipients } from './mask-email.js';
@@ -16,15 +24,12 @@ import { previewPage } from './preview-page.js';
 import { listTemplatePreviews } from '../templates/template-preview-data.js';
 import { adminLoginPage } from './admin-login-page.js';
 import { adminDashboardPage } from './admin-dashboard-page.js';
-import { AdminAuth, AdminLoginRateLimiter, adminSessionCookie, clearAdminSessionCookie } from '../security/admin-auth.js';
 import { z } from 'zod';
 import { safeErrorDetails } from './safe-error.js';
 import type { RateLimiter } from '../application/rate-limiter.js';
 import { InMemoryRateLimiter } from '../infrastructure/rate-limit/in-memory-rate-limiter.js';
 import { GatewayMetrics } from '../observability/metrics.js';
 import type { EmailJobQueue } from '../application/email-job-queue.js';
-import { registerRestRoutes } from './routes/rest-routes.js';
-import { registerUiRoutes } from './routes/ui-routes.js';
 import type { CreateEmailAccountInput, UpdateEmailAccountInput } from '../application/email-account-store.js';
 
 interface BuildAppDependencies {
@@ -44,7 +49,7 @@ interface BuildAppDependencies {
 }
 
 function createTestAccountStore(projects: readonly ProjectConfig[]): EmailAccountStore {
-  const accounts: EmailAccount[] = projects.map((project) => ({ id: `test-account-${project.id}`, name: `${project.id}-default`, email: project.fromEmail, provider: SmtpProvider.PURELY_MAIL, credentials: { username: 'test', password: 'test' }, active: true }));
+  const accounts: EmailAccount[] = projects.map((project) => ({ id: `test-account-${project.id}`, name: `${project.id}-default`, email: project.fromEmail ?? `${project.id}@example.test`, provider: SmtpProvider.PURELY_MAIL, credentials: { username: 'test', password: 'test' }, active: true }));
   const defaults = new Map(projects.map((project) => [project.id, `test-account-${project.id}`]));
   const projectAccounts = new Map(projects.map((project) => [project.id, [`test-account-${project.id}`]] as const));
   return new InMemoryEmailAccountStore(accounts, defaults, projectAccounts);
@@ -68,9 +73,6 @@ export function buildApp({
   const app = Fastify({ logger, bodyLimit, trustProxy });
   const sendEmail = new SendEmailUseCase(emailProvider, deliveryStore, emailAccountStore);
   const requestStartedAt = new WeakMap<object, bigint>();
-  
-  registerRestRoutes(app, { projects, sendEmail, adminAuth, adminLoginRateLimiter, secureAdminCookie, deliveryStore, rateLimiter, metrics, emailQueue });
-  registerUiRoutes(app, { adminAuth });
   
 
   app.addHook('onRequest', async (request, reply) => {
@@ -264,7 +266,10 @@ export function buildApp({
     if (!adminAuth.isAuthenticated(request.headers.cookie)) return reply.code(401).send({ error: 'admin_authentication_required', message: 'Administrator login is required' });
     const project = resolveProjectFromAuthorization(request.headers.authorization, projects);
     if (!project) return reply.code(401).send({ error: 'unauthorized', message: 'Missing or invalid project API key' });
-    return { projectId: project.id, fromEmail: project.fromEmail, allowedTemplates: project.allowedTemplates };
+    // The envelope sender lives in the project's default email account (database).
+    // Project FROM_EMAIL, when set, is only a display override.
+    const defaultAccount = await emailAccountStore.findDefaultForProject(project.id).catch(() => null);
+    return { projectId: project.id, fromEmail: project.fromEmail ?? defaultAccount?.email ?? null, allowedTemplates: project.allowedTemplates };
   });
 
   app.get('/preview', async (_request, reply) => {

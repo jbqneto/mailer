@@ -42,7 +42,7 @@ export function adminDashboardPage(data: AdminDashboardData): string {
     return `
       <tr>
         <td><code>${project.id}</code></td>
-        <td>${project.fromName} <${project.fromEmail}></td>
+        <td>${project.fromName} &lt;${project.fromEmail ?? 'conta default do banco'}&gt;</td>
         <td>${project.allowedTemplates.join(', ') || '—'}</td>
         <td>${accounts.length} (${activeAccounts} active)</td>
         <td>${project.replyTo ?? '—'}</td>
@@ -80,7 +80,7 @@ export function adminDashboardPage(data: AdminDashboardData): string {
   const queueStatus = emailQueue ? 'Active' : 'Not configured';
   const queueType = emailQueue?.constructor.name || '—';
 
-  const projectOptions = projects.map((p) => `<option value="${p.id}">${p.id} (${p.fromEmail})</option>`).join('');
+  const projectOptions = projects.map((p) => `<option value="${p.id}">${p.id} (${p.fromEmail ?? 'conta default do banco'})</option>`).join('');
 
   return `<!doctype html>
 <html lang="en">

@@ -27,9 +27,9 @@ const activeProject: ProjectDefinition = {
   allowedTemplates: ['*'],
 };
 
-function configureActiveProject(): void {
+function configureActiveProject(withFromEmail = true): void {
   process.env.ACTIVE_API_KEY = 'a'.repeat(32);
-  process.env.ACTIVE_FROM_EMAIL = 'sender@example.com';
+  if (withFromEmail) process.env.ACTIVE_FROM_EMAIL = 'sender@example.com';
 }
 
 describe('loadProjects', () => {
@@ -51,5 +51,20 @@ describe('loadProjects', () => {
     expect(() => loadProjects([activeProject])).toThrow(
       'active-project: Missing required environment variable: ACTIVE_API_KEY',
     );
+  });
+
+  it('loads an active project without FROM_EMAIL (sender comes from the email account store)', () => {
+    configureActiveProject(false);
+    const [project] = loadProjects([activeProject]);
+    expect(project?.fromEmail).toBeUndefined();
+    expect(project?.fromName).toBe('active-project');
+  });
+
+  it('prefers FROM_NAME over the project id when FROM_EMAIL is missing', () => {
+    configureActiveProject(false);
+    process.env.ACTIVE_FROM_NAME = 'Active Project';
+    const [project] = loadProjects([activeProject]);
+    expect(project?.fromEmail).toBeUndefined();
+    expect(project?.fromName).toBe('Active Project');
   });
 });

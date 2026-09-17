@@ -147,7 +147,11 @@ HttpOnly session cookie. Failed attempts are rate-limited by source IP.
 ## GET /v1/projects/me
 
 Requires the administrator session cookie and a project API key. Returns the
-resolved project ID, configured sender address, and allowed template names.
+resolved project ID, sender address, and allowed template names. The sender
+address is the project `FROM_EMAIL` override when set, otherwise the
+project's default email account address from the database (`null` when
+neither exists). The envelope sender of delivered mail always comes from the
+email account, never from this override.
 
 Errors:
 

@@ -1,1 +1,42 @@
-{"projects":[{"id":"bloom-app","envPrefix":"BLOOM_APP","active":true,"allowedTemplates":["shared-access-invitation","shared-access-permission-updated","shared-access-suspended","shared-access-revoked"]},{"id":"pontebr","envPrefix":"PONTEBR","active":false,"allowedTemplates":["*"]},{"id":"blocos-e-bits","envPrefix":"BLOCOS_E_BITS","active":false,"allowedTemplates":["*"]},{"id":"jbqneto","envPrefix":"JBQNETO","active":false,"allowedTemplates":["*"]}]}
+{
+  "projects": [
+    {
+      "id": "bloom-app",
+      "envPrefix": "BLOOM_APP",
+      "active": true,
+      "allowedTemplates": [
+        "shared-access-invitation",
+        "shared-access-permission-updated",
+        "shared-access-suspended",
+        "shared-access-revoked",
+        "generic-welcome",
+        "generic-email-confirmation",
+        "generic-password-reset"
+      ]
+    },
+    {
+      "id": "pontebr",
+      "envPrefix": "PONTEBR",
+      "active": false,
+      "allowedTemplates": ["*"]
+    },
+    {
+      "id": "blocos-e-bits",
+      "envPrefix": "BLOCOS_E_BITS",
+      "active": false,
+      "allowedTemplates": ["*"]
+    },
+    {
+      "id": "jbqneto",
+      "envPrefix": "JBQNETO",
+      "active": false,
+      "allowedTemplates": ["*"]
+    },
+    {
+      "id": "digitalcard",
+      "envPrefix": "DIGITALCARD",
+      "active": false,
+      "allowedTemplates": ["*"]
+    }
+  ]
+}

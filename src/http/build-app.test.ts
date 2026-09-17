@@ -10,6 +10,7 @@ import {
 } from '../security/admin-auth.js';
 import { buildApp } from './build-app.js';
 import { InMemoryRateLimiter } from '../infrastructure/rate-limit/in-memory-rate-limiter.js';
+import { InMemoryEmailAccountStore } from '../infrastructure/storage/in-memory-email-account-store.js';
 
 class FakeEmailProvider implements EmailProvider {
   readonly sent: EmailMessage[] = [];
@@ -114,6 +115,77 @@ describe('POST /v1/emails/preview', () => {
     expect(response.json()).toMatchObject({
       projectId: project.id,
       fromEmail: project.fromEmail,
+    });
+
+    await app.close();
+  });
+
+  it('falls back to the default email account address when the project has no FROM_EMAIL', async () => {
+    const projectWithoutFromEmail = {
+      id: 'db-sender-project',
+      apiKey: 'd'.repeat(32),
+      fromName: 'DB Sender Project',
+      allowedTemplates: ['*'] as const,
+    };
+    const emailAccountStore = new InMemoryEmailAccountStore(
+      [{ ...testAccount, id: 'account-1', email: 'smtp@db.example.com' }],
+      new Map([[projectWithoutFromEmail.id, 'account-1']]),
+      new Map([[projectWithoutFromEmail.id, ['account-1']]]),
+    );
+    const app = buildApp({
+      projects: [projectWithoutFromEmail],
+      emailProvider: new FakeEmailProvider(),
+      emailAccountStore,
+      adminAuth,
+      logger: false,
+    });
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/v1/projects/me',
+      headers: {
+        cookie: adminCookie,
+        authorization: `Bearer ${projectWithoutFromEmail.apiKey}`,
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      projectId: projectWithoutFromEmail.id,
+      fromEmail: 'smtp@db.example.com',
+    });
+
+    await app.close();
+  });
+
+  it('returns a null sender address when neither FROM_EMAIL nor a default account exists', async () => {
+    const projectWithoutFromEmail = {
+      id: 'senderless-project',
+      apiKey: 'e'.repeat(32),
+      fromName: 'Senderless Project',
+      allowedTemplates: ['*'] as const,
+    };
+    const app = buildApp({
+      projects: [projectWithoutFromEmail],
+      emailProvider: new FakeEmailProvider(),
+      emailAccountStore: new InMemoryEmailAccountStore(),
+      adminAuth,
+      logger: false,
+    });
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/v1/projects/me',
+      headers: {
+        cookie: adminCookie,
+        authorization: `Bearer ${projectWithoutFromEmail.apiKey}`,
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      projectId: projectWithoutFromEmail.id,
+      fromEmail: null,
     });
 
     await app.close();
